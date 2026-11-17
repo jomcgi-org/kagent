@@ -1,7 +1,7 @@
 # Codex Harness
 
 The Codex Harness compiles an `api.kagent.dev/v1alpha3` `AgentTemplate` into a
-compiler-owned Codex configuration and runs one Codex App Server `0.161.0`
+compiler-owned Codex configuration and runs one Codex App Server `0.171.0-alpha.12`
 process for each native turn within a public A2A Task. Its native thread and workspace are retained
 in the Actor's `DurableDir`.
 
