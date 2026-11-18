@@ -25,9 +25,9 @@ jobs:
       with:
         go-version-file: go/go.mod
         cache-dependency-path: go/go.sum
-    - name: Test the Codex harness and its compiler
+    - name: Test the Codex harness, its compiler and the Substrate client
       working-directory: go
-      run: go test ./harness/codex/... ./core/internal/translator/codex/...
+      run: go test -v -run . ./harness/codex/... ./core/internal/translator/codex/... ./core/internal/substrate/... ./core/pkg/config/...
 
   push-images:
     needs: test
