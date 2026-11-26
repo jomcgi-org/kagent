@@ -48,6 +48,9 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		return nil, fmt.Errorf("hermes compiler requires a resolved Harness, AgentTemplate, and ModelConfig")
 	}
 	template, harness := input.Root.Template, input.Harness
+	if input.OutputSchema != nil {
+		return nil, translator.NewValidationError("Hermes does not support structured output")
+	}
 	if len(input.Root.MCPTools) != 0 || len(input.Root.Shared) != 0 || len(template.Spec.Tools) != 0 || len(template.Spec.Skills) != 0 || len(template.Spec.Plugins) != 0 {
 		return nil, translator.NewValidationError("Hermes does not support tools, skills, plugins, or Shared agents")
 	}

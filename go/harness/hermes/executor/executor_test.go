@@ -66,7 +66,7 @@ func collect(t *testing.T, executor a2asrv.AgentExecutor, reqCtx *a2asrv.Executo
 func TestExecutorRunsTurnsThroughHermes(t *testing.T) {
 	dataDir := t.TempDir()
 	raw := testConfig(t)
-	exec, closer, err := New(t.Context(), Config{ConfigJSON: raw, DataDir: dataDir, Environment: os.Environ(), Start: true, Output: &bytes.Buffer{}})
+	exec, closer, err := New(t.Context(), Config{ConfigJSON: raw, DataDir: dataDir, Environment: os.Environ(), Output: &bytes.Buffer{}})
 	require.NoError(t, err)
 	text, state := collect(t, exec, request("task-1", "context-a", "hello"))
 	require.Equal(t, a2atype.TaskStateCompleted, state)

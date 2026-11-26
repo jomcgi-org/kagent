@@ -85,7 +85,7 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		}
 	}()
 
-	exec, closer, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Start: !check})
+	exec, closer, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment})
 	if err != nil {
 		return err
 	}

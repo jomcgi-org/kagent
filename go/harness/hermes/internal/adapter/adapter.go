@@ -11,7 +11,6 @@ import (
 
 	"github.com/kagent-dev/kagent/go/harness/hermes/config"
 	"github.com/kagent-dev/kagent/go/harness/hermes/internal/driver"
-	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 )
 
 // Input contains compiler output and Actor-owned locations used to construct
@@ -24,7 +23,7 @@ type Input struct {
 	Output io.Writer
 }
 
-// New validates the configuration, writes HERMES_HOME, and returns the driver.
+// New validates the configuration and returns the driver.
 func New(_ context.Context, input Input) (*driver.Driver, error) {
 	cfg, err := config.Parse(input.ConfigJSON)
 	if err != nil {
@@ -33,15 +32,11 @@ func New(_ context.Context, input Input) (*driver.Driver, error) {
 	if !filepath.IsAbs(input.DurableDir) {
 		return nil, fmt.Errorf("durable directory must be an absolute path")
 	}
-	home := config.HermesHome(input.DurableDir)
-	if err := utils.EnsurePrivateDir(home); err != nil {
-		return nil, fmt.Errorf("prepare Hermes home: %w", err)
-	}
-	if err := driver.WriteHome(home, driver.Settings{Model: cfg.Model, BaseURL: cfg.BaseURL, APIKey: lookup(input.Environment, config.APIKeyEnvName)}); err != nil {
-		return nil, err
-	}
+	// The driver writes HERMES_HOME before each gateway start, not here: a
+	// snapshot restore can replace /data after this runs.
 	return driver.New(driver.Config{
-		GatewayCommand: cfg.GatewayCommand, Home: home, Port: cfg.APIServerPort,
+		GatewayCommand: cfg.GatewayCommand, Home: config.HermesHome(input.DurableDir), Port: cfg.APIServerPort,
+		Settings:     driver.Settings{Model: cfg.Model, BaseURL: cfg.BaseURL, APIKey: lookup(input.Environment, config.APIKeyEnvName)},
 		Instructions: cfg.Instructions, Model: cfg.Model, Provider: cfg.RuntimeTelemetry.Provider,
 		Environment: input.Environment, StartupTimeout: cfg.StartupTimeout(), TurnTimeout: cfg.TurnTimeout(),
 		StopGrace: cfg.StopGrace(), MaxBytes: cfg.MaxResponseBytes, Output: input.Output,

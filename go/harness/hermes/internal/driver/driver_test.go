@@ -101,7 +101,7 @@ func TestClientRespond(t *testing.T) {
 		{name: "cancelled", code: 200, body: `{"status":"cancelled","output":[]}`, wantStatus: "cancelled", wantPublic: "Hermes turn was cancelled"},
 		{name: "unsettled is never polled", code: 200, body: `{"status":"in_progress","output":[]}`, wantStatus: "in_progress", wantPublic: "Hermes turn did not settle"},
 		{name: "completed without an answer", code: 200, body: `{"status":"completed","output":[]}`, wantStatus: "completed", wantPublic: "Hermes turn finished without an answer"},
-		{name: "HTTP error", code: 429, body: `{"error":{"message":"busy"}}`, wantErr: "Hermes HTTP 429: busy"},
+		{name: "HTTP error", code: 429, body: `{"error":{"message":"busy"}}`, wantErr: "Hermes HTTP 429"},
 		{name: "malformed", code: 200, body: `{`, wantErr: "decode Hermes response"},
 		{name: "oversized", code: 200, body: `{"status":"completed","pad":"` + strings.Repeat("x", 2048) + `"}`, wantErr: "larger than"},
 	}
@@ -126,6 +126,7 @@ func TestClientRespond(t *testing.T) {
 			switch {
 			case test.wantErr != "":
 				require.ErrorContains(t, err, test.wantErr)
+				require.NotContains(t, err.Error(), "busy")
 			case test.wantPublic != "":
 				var turnErr *TurnError
 				require.ErrorAs(t, err, &turnErr)
@@ -180,7 +181,8 @@ func newFakeDriver(t *testing.T, environment []string) (*Driver, string) {
 	home := t.TempDir()
 	d, err := New(Config{
 		GatewayCommand: fakehermes.Command(), Home: home, Port: freePort(t), Instructions: "be brief",
-		Model: "deepseek/deepseek-v4.1-flash", Provider: "openai", Environment: environment,
+		Settings: Settings{Model: "deepseek/deepseek-v4.1-flash", BaseURL: "https://openrouter.ai/api/v1"},
+		Model:    "deepseek/deepseek-v4.1-flash", Provider: "openai", Environment: environment,
 		StartupTimeout: 20 * time.Second, TurnTimeout: 20 * time.Second, StopGrace: 5 * time.Second,
 		MaxBytes: 1 << 20, Output: &bytes.Buffer{},
 	})
@@ -293,8 +295,43 @@ func TestRunRejectsInputResponse(t *testing.T) {
 	require.ErrorContains(t, err, "no parked turn")
 }
 
+// A snapshot restore gives /data new backing files. The next turn finds the
+// gateway unhealthy, rewrites HERMES_HOME, and starts a new gateway.
+func TestRunRestartsAfterDataReplacement(t *testing.T) {
+	d, home := newFakeDriver(t, os.Environ())
+	_, err := os.Stat(filepath.Join(home, "config.yaml"))
+	require.True(t, os.IsNotExist(err), "the gateway and its config wait for the first turn")
+	sink := &recordingSink{}
+	_, err = d.Run(t.Context(), runtime.Turn{TaskID: "t1", Prompt: "hello", ContinuationID: "kagent-fixed"}, sink)
+	require.NoError(t, err)
+	require.Equal(t, "echo: hello", sink.text.String())
+
+	// Replace /data: the old directory moves away and a restored one, with an
+	// older config and a planted .env, takes its path.
+	require.NoError(t, os.Rename(home, home+".old"))
+	t.Cleanup(func() { _ = os.RemoveAll(home + ".old") })
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.yaml"), []byte("toolsets: [terminal]\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_YOLO_MODE=1\n"), 0o600))
+
+	sink = &recordingSink{}
+	outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: "t2", Prompt: "again", ContinuationID: "kagent-fixed"}, sink)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Equal(t, "echo: again", sink.text.String())
+	_, err = os.Stat(filepath.Join(home, ".env"))
+	require.True(t, os.IsNotExist(err), ".env must be removed before the new gateway starts")
+	raw, err := os.ReadFile(filepath.Join(home, "config.yaml"))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "toolsets: []\n")
+	require.NotContains(t, string(raw), "terminal]")
+	requests, err := fakehermes.Requests(home)
+	require.NoError(t, err)
+	require.Len(t, requests, 1, "the second turn reaches the new gateway")
+}
+
 func TestValidateRequiresGatewayExecutable(t *testing.T) {
-	d, err := New(Config{GatewayCommand: []string{"/nonexistent/hermes", "gateway"}})
+	d, err := New(Config{GatewayCommand: []string{"/nonexistent/hermes", "gateway"}, Settings: Settings{Model: "m", BaseURL: "https://example.com/v1"}})
 	require.NoError(t, err)
 	require.ErrorContains(t, d.Validate(t.Context()), "find Hermes gateway executable")
 }

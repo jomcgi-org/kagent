@@ -26,9 +26,6 @@ type Config struct {
 	// Environment is the Actor environment. The gateway inherits only an
 	// allowlisted part of it.
 	Environment []string
-	// Start runs the gateway before New returns, so a snapshot taken after
-	// start-up holds a warm gateway. Otherwise the first turn starts it.
-	Start bool
 	// Output receives the gateway's logs. Nil means os.Stderr.
 	Output io.Writer
 }
@@ -65,11 +62,7 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		_ = runner.Close()
 		return nil, nil, err
 	}
-	if cfg.Start {
-		if err := runner.Start(ctx); err != nil {
-			_ = runner.Close()
-			return nil, nil, err
-		}
-	}
+	// The first turn starts the gateway. Starting it here would put it in the
+	// golden snapshot, whose restore replaces the /data files it holds open.
 	return executor, runner, nil
 }

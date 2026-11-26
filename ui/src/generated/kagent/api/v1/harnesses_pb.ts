@@ -33,7 +33,7 @@ export type Harness = Message<"kagent.api.v1.Harness"> & {
   resource?: StructuredObject | undefined;
 
   /**
-   * Runtime is the adapter the spec selects: "kagent", "codex", "claude" or "byo".
+   * Runtime is the adapter the spec selects: "kagent", "codex", "claude", "hermes" or "byo".
    * Denormalised because callers listing harnesses group and filter by it, and
    * would otherwise each reimplement the exactly-one-of check the CRD enforces.
    *

@@ -88,9 +88,31 @@ func serve() error {
 	if err := os.WriteFile(filepath.Join(home, "fake-env.txt"), []byte(strings.Join(os.Environ(), "\n")), 0o600); err != nil {
 		return err
 	}
+	// Like Hermes' open SQLite state, the fake holds a file in HERMES_HOME.
+	// When a restore replaces the directory, the held file no longer backs
+	// HERMES_HOME, and the fake reports itself unhealthy instead of exiting.
+	held, err := os.Open(filepath.Join(home, "fake-env.txt"))
+	if err != nil {
+		return err
+	}
+	defer held.Close()
+	heldInfo, err := held.Stat()
+	if err != nil {
+		return err
+	}
+	backed := func() bool {
+		current, err := os.Stat(filepath.Join(home, "fake-env.txt"))
+		return err == nil && os.SameFile(heldInfo, current)
+	}
 	var mu sync.Mutex
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ok"}`)) })
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		if !backed() {
+			http.Error(w, `{"status":"state moved"}`, http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Input        string `json:"input"`
@@ -115,6 +137,10 @@ func serve() error {
 			_ = f.Close()
 		}
 		mu.Unlock()
+		if !backed() {
+			http.Error(w, `{"error":{"message":"attempt to write a readonly database"}}`, http.StatusInternalServerError)
+			return
+		}
 		if recorded.Authorization != "Bearer "+key {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":{"message":"invalid API key"}}`))

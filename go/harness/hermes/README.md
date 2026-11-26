@@ -18,10 +18,10 @@ image; make that binary the entrypoint.
 | --- | --- |
 | [`../../core/internal/translator/hermes`](../../core/internal/translator/hermes) | Translating `Harness`, `AgentTemplate`, model, and Secret inputs into a runtime revision |
 | [`config/config.go`](config/config.go) | The versioned JSON contract shared by the compiler and runtime |
-| [`cmd/main.go`](cmd/main.go) | Actor startup, bootstrap bundle, gateway start-up, and private A2A startup |
+| [`cmd/main.go`](cmd/main.go) | Actor startup, bootstrap bundle, and private A2A startup |
 | [`executor`](executor) | The shared A2A executor and continuation store around the driver |
-| [`internal/adapter`](internal/adapter) | Writing `HERMES_HOME` from the compiled configuration |
-| [`internal/driver`](internal/driver) | Gateway lifecycle, environment allowlist, and the `/v1/responses` client |
+| [`internal/adapter`](internal/adapter) | Building the driver from the compiled configuration |
+| [`internal/driver`](internal/driver) | `HERMES_HOME`, gateway lifecycle, environment allowlist, and the `/v1/responses` client |
 
 ## Request flow
 
@@ -55,9 +55,10 @@ than `baseUrl` and `apiFormat: chatCompletions`.
 
 - `config.yaml` turns off every toolset, memory, and lazy installs, and denies
   every approval (`unattended_mode: deny`), so a turn never waits on a person.
-  The adapter writes it on every start; the compiled configuration owns it.
-- The adapter removes `$HERMES_HOME/.env`, which Hermes loads over the process
-  environment.
+  The adapter writes it before every gateway start; the compiled configuration
+  owns it.
+- Before every gateway start the adapter removes `$HERMES_HOME/.env`, which
+  Hermes loads over the process environment.
 - The gateway inherits only an allowlist of the Actor environment (locale,
   CA bundles, the Hermes image's own settings, and `OTEL_*`). A messaging
   token, the model placeholder, or `HERMES_YOLO_MODE` never reaches it.
@@ -73,7 +74,15 @@ every later turn. The continuation store keeps it in `DurableDir`, so it
 survives Actor replacement and snapshot restore. The header alone scopes the
 session; `conversation` makes Hermes 0.23.4 chain the transcript.
 
+## Gateway lifecycle
+
+The first turn starts the gateway, never actor start-up: a golden snapshot
+restore gives `/data` new backing files, which would break the SQLite files a
+running gateway holds open. Before each turn the adapter checks `/health`. If
+the gateway exited or fails the check, the adapter stops it, rewrites
+`HERMES_HOME`, and starts a new one.
+
 ## Limits
 
 - Cancellation closes the HTTP request. Hermes can finish the turn on its side.
-- If the gateway exits, the next turn starts it again.
+- The first turn of each Actor waits for the gateway to start.

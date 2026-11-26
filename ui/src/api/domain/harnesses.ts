@@ -2,8 +2,8 @@
 
 import type { ResourceMetadata } from "./common";
 
-/** The runtime adapters a harness can select. */
-export type HarnessRuntime = "kagent" | "codex" | "claude" | "byo";
+/** The runtime adapters a harness can select. The harness form does not offer hermes yet. */
+export type HarnessRuntime = "kagent" | "codex" | "claude" | "hermes" | "byo";
 
 export interface Harness {
   /** `namespace/name`. */

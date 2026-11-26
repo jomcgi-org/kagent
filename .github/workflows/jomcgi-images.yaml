@@ -38,6 +38,12 @@ jobs:
           ./core/internal/substrate/... ./core/pkg/config/...
         go test -v -run 'TestReconciliationWorkerPoolSandboxClass|TestHarnessRuntime' \
           ./core/internal/controller ./core/internal/grpcserver
+    - name: Test the CRD validation rules against envtest
+      working-directory: go
+      run: |
+        version=$(go list -m -f '{{ .Version }}' k8s.io/api | awk -F'[v.]' '{printf "1.%d", $3}')
+        KUBEBUILDER_ASSETS="$(go tool setup-envtest use "$version" --bin-dir "$RUNNER_TEMP/envtest" -p path)" \
+          go test -v -run . ./api/v1alpha3
 
   push-images:
     needs: test

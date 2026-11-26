@@ -27,7 +27,9 @@ const SessionKeyPrefix = "kagent-"
 type Config struct {
 	GatewayCommand []string
 	// Home is HERMES_HOME. It is durable: Hermes keeps its sessions there.
-	Home           string
+	Home string
+	// Settings are written into Home before each gateway start.
+	Settings       Settings
 	Port           int
 	Instructions   string
 	Model          string
@@ -57,6 +59,9 @@ func New(cfg Config) (*Driver, error) {
 	if len(cfg.GatewayCommand) == 0 {
 		return nil, fmt.Errorf("Hermes gateway command is required")
 	}
+	if _, err := RenderConfig(cfg.Settings); err != nil {
+		return nil, err
+	}
 	if cfg.Output == nil {
 		cfg.Output = os.Stderr
 	}
@@ -81,14 +86,29 @@ func (d *Driver) Start(ctx context.Context) error {
 	return err
 }
 
-// ensureGateway returns a client for a healthy gateway, and starts one when
-// none runs, such as after the gateway exited.
+// ensureGateway returns a client for a healthy gateway. It starts one when
+// none runs, and replaces one that exited or fails its health check.
+//
+// The gateway starts lazily, never before a golden snapshot: a restore gives
+// /data new backing files, which would break the SQLite files a running
+// gateway holds open. Each start first rewrites HERMES_HOME, so a restored
+// /data cannot carry an older config.yaml or a .env.
 func (d *Driver) ensureGateway(ctx context.Context) (*client, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.gateway.running() && !d.gateway.healthy(ctx, d.http) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		logging.FromContext(ctx).WarnContext(ctx, "Hermes gateway failed its health check; starting it again")
+		d.gateway.stop(d.cfg.StopGrace)
+	} else if d.gateway != nil && !d.gateway.running() {
+		logging.FromContext(ctx).WarnContext(ctx, "Hermes gateway exited; starting it again", "error", d.gateway.exitErr)
+	}
 	if !d.gateway.running() {
-		if d.gateway != nil {
-			logging.FromContext(ctx).WarnContext(ctx, "Hermes gateway exited; starting it again", "error", d.gateway.exitErr)
+		d.gateway = nil
+		if err := WriteHome(d.cfg.Home, d.cfg.Settings); err != nil {
+			return nil, err
 		}
 		g := &gateway{command: d.cfg.GatewayCommand, home: d.cfg.Home, port: d.cfg.Port, key: d.key, output: d.cfg.Output}
 		if err := g.start(d.cfg.Environment); err != nil {

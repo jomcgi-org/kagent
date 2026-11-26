@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // SessionKeyHeader names the Hermes conversation for session and memory scoping.
@@ -152,8 +154,9 @@ func (c *client) respond(ctx context.Context, r request) (reply, error) {
 	var out responsesBody
 	decodeErr := json.Unmarshal(data, &out)
 	if resp.StatusCode != http.StatusOK {
+		// Hermes' message can carry provider text, so only the log has it.
 		if decodeErr == nil && out.Error != nil && out.Error.Message != "" {
-			return reply{}, fmt.Errorf("Hermes HTTP %d: %.300s", resp.StatusCode, out.Error.Message)
+			logging.FromContext(ctx).WarnContext(ctx, "Hermes API server refused the turn", "status", resp.StatusCode, "error", fmt.Sprintf("%.300s", out.Error.Message))
 		}
 		return reply{}, fmt.Errorf("Hermes HTTP %d", resp.StatusCode)
 	}

@@ -147,6 +147,9 @@ func TestCompileRejectsUnsupportedInputs(t *testing.T) {
 		{name: "Shared agents", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
 			input.Root.Shared = []translator.AgentInputBinding{{Name: "child"}}
 		}, wantErr: "does not support tools"},
+		{name: "structured output", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
+			input.OutputSchema = &translator.ResolvedOutputSchema{}
+		}, wantErr: "structured output"},
 		{name: "reserved env", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
 			input.Harness.Spec.Env = []v1alpha3.RuntimeEnvVar{{Name: "HERMES_YOLO_MODE", Value: "1"}}
 		}, wantErr: "conflicts with Hermes"},
