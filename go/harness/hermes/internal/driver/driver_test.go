@@ -34,10 +34,11 @@ func TestRenderConfigDisablesToolsMemoryAndApprovals(t *testing.T) {
 	require.NoError(t, err)
 	var cfg map[string]any
 	require.NoError(t, yaml.Unmarshal(raw, &cfg))
-	require.Equal(t, map[string]any{
-		"default": "deepseek/deepseek-v4.1-flash", "provider": "custom",
-		"base_url": "https://openrouter.ai/api/v1", "api_key": CredentialPlaceholder,
-	}, cfg["model"])
+	require.Equal(t, map[string]any{"default": "deepseek/deepseek-v4.1-flash", "provider": ProviderName}, cfg["model"])
+	require.Equal(t, map[string]any{ProviderName: map[string]any{
+		"name": ProviderName, "base_url": "https://openrouter.ai/api/v1",
+		"api_key": CredentialPlaceholder, "api_mode": "chat_completions",
+	}}, cfg["providers"])
 	require.Equal(t, []any{}, cfg["toolsets"])
 	require.Equal(t, map[string]any{"api_server": []any{}}, cfg["platform_toolsets"])
 	disabled := cfg["agent"].(map[string]any)["disabled_toolsets"].([]any)

@@ -36,8 +36,11 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
 
 ## Implemented support
 
-- One OpenAI-compatible model, called by Hermes as its `custom` provider
-  through chat completions. `openAI.baseUrl` names the endpoint, such as
+- One OpenAI-compatible model, written as the named `providers.kagent` entry
+  (`base_url`, the placeholder `api_key`, `api_mode: chat_completions`) with
+  `model.provider: kagent`. Hermes takes a named entry's key before any
+  environment key. A bare `provider: custom` resolves a remote host such as
+  openrouter.ai without a key and fails. `openAI.baseUrl` names the endpoint, such as
   OpenRouter; without it, the OpenAI API.
 - The model key comes from a Secret through
   [Substrate gateway injection](../../../docs/architecture/credential-injection.md),

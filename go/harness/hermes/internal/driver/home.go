@@ -38,11 +38,24 @@ type Settings struct {
 	APIKey string
 }
 
+// ProviderName names the providers: entry that holds the compiled endpoint.
+const ProviderName = "kagent"
+
 type modelConfig struct {
 	Default  string `yaml:"default"`
 	Provider string `yaml:"provider"`
-	BaseURL  string `yaml:"base_url"`
-	APIKey   string `yaml:"api_key"`
+}
+
+// providerConfig is one named OpenAI-compatible endpoint. Hermes 0.23.4
+// takes a named entry's own api_key before any environment key, for every
+// host. A bare `provider: custom` with model.base_url resolves only for a
+// loopback host: for a remote host, such as openrouter.ai, it ignores
+// model.api_key and fails with "resolved without credentials".
+type providerConfig struct {
+	Name    string `yaml:"name"`
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+	APIMode string `yaml:"api_mode"`
 }
 
 type agentConfig struct {
@@ -76,14 +89,15 @@ type auxiliaryConfig struct {
 }
 
 type hermesConfig struct {
-	Model            modelConfig         `yaml:"model"`
-	Toolsets         []string            `yaml:"toolsets"`
-	PlatformToolsets map[string][]string `yaml:"platform_toolsets"`
-	Agent            agentConfig         `yaml:"agent"`
-	Memory           memoryConfig        `yaml:"memory"`
-	Approvals        approvalsConfig     `yaml:"approvals"`
-	Security         securityConfig      `yaml:"security"`
-	Auxiliary        auxiliaryConfig     `yaml:"auxiliary"`
+	Model            modelConfig               `yaml:"model"`
+	Providers        map[string]providerConfig `yaml:"providers"`
+	Toolsets         []string                  `yaml:"toolsets"`
+	PlatformToolsets map[string][]string       `yaml:"platform_toolsets"`
+	Agent            agentConfig               `yaml:"agent"`
+	Memory           memoryConfig              `yaml:"memory"`
+	Approvals        approvalsConfig           `yaml:"approvals"`
+	Security         securityConfig            `yaml:"security"`
+	Auxiliary        auxiliaryConfig           `yaml:"auxiliary"`
 }
 
 // hindsightConfig is $HERMES_HOME/hindsight/config.json. It stays inert
@@ -101,7 +115,10 @@ func RenderConfig(s Settings) ([]byte, error) {
 		s.APIKey = CredentialPlaceholder
 	}
 	return yaml.Marshal(hermesConfig{
-		Model: modelConfig{Default: s.Model, Provider: "custom", BaseURL: s.BaseURL, APIKey: s.APIKey},
+		Model: modelConfig{Default: s.Model, Provider: ProviderName},
+		Providers: map[string]providerConfig{ProviderName: {
+			Name: ProviderName, BaseURL: s.BaseURL, APIKey: s.APIKey, APIMode: "chat_completions",
+		}},
 		// An explicit empty list enables no toolset and merges no MCP server
 		// (hermes_cli/tools_config.py _get_platform_tools at v0.23.4).
 		Toolsets:         []string{},
