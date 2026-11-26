@@ -1,0 +1,186 @@
+// Package driver runs Hermes Agent's API server and maps one runtime turn to
+// one non-streaming /v1/responses call.
+package driver
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
+)
+
+// SessionKeyPrefix starts every session key the driver creates.
+const SessionKeyPrefix = "kagent-"
+
+// Config contains the compiled and Actor-owned inputs for the driver.
+type Config struct {
+	GatewayCommand []string
+	// Home is HERMES_HOME. It is durable: Hermes keeps its sessions there.
+	Home           string
+	Port           int
+	Instructions   string
+	Model          string
+	Provider       string
+	Environment    []string
+	StartupTimeout time.Duration
+	TurnTimeout    time.Duration
+	StopGrace      time.Duration
+	MaxBytes       int
+	// Output receives the gateway's stdout and stderr. Nil means os.Stderr.
+	Output io.Writer
+}
+
+// Driver owns one Hermes gateway and runs the Actor's turns through it.
+type Driver struct {
+	cfg  Config
+	http *http.Client
+	now  func() time.Time
+
+	mu      sync.Mutex
+	key     string
+	gateway *gateway
+}
+
+// New returns a driver. The gateway starts on Start or on the first turn.
+func New(cfg Config) (*Driver, error) {
+	if len(cfg.GatewayCommand) == 0 {
+		return nil, fmt.Errorf("Hermes gateway command is required")
+	}
+	if cfg.Output == nil {
+		cfg.Output = os.Stderr
+	}
+	key, err := newKey()
+	if err != nil {
+		return nil, fmt.Errorf("create Hermes API server key: %w", err)
+	}
+	return &Driver{cfg: cfg, http: &http.Client{Timeout: cfg.TurnTimeout}, now: time.Now, key: key}, nil
+}
+
+// Validate checks that the gateway executable exists.
+func (d *Driver) Validate(context.Context) error {
+	if _, err := exec.LookPath(d.cfg.GatewayCommand[0]); err != nil {
+		return fmt.Errorf("find Hermes gateway executable: %w", err)
+	}
+	return nil
+}
+
+// Start runs the gateway and waits until its API server is healthy.
+func (d *Driver) Start(ctx context.Context) error {
+	_, err := d.ensureGateway(ctx)
+	return err
+}
+
+// ensureGateway returns a client for a healthy gateway, and starts one when
+// none runs, such as after the gateway exited.
+func (d *Driver) ensureGateway(ctx context.Context) (*client, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.gateway.running() {
+		if d.gateway != nil {
+			logging.FromContext(ctx).WarnContext(ctx, "Hermes gateway exited; starting it again", "error", d.gateway.exitErr)
+		}
+		g := &gateway{command: d.cfg.GatewayCommand, home: d.cfg.Home, port: d.cfg.Port, key: d.key, output: d.cfg.Output}
+		if err := g.start(d.cfg.Environment); err != nil {
+			return nil, err
+		}
+		startCtx, cancel := context.WithTimeout(ctx, d.cfg.StartupTimeout)
+		err := g.waitHealthy(startCtx, d.http)
+		cancel()
+		if err != nil {
+			g.stop(d.cfg.StopGrace)
+			return nil, err
+		}
+		d.gateway = g
+	}
+	return &client{baseURL: d.gateway.url(), key: d.key, http: d.http, maxBytes: d.cfg.MaxBytes}, nil
+}
+
+// Run executes one turn. Hermes never parks a turn: approvals are denied in
+// its configuration and a turn that does not settle fails.
+func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+	if turn.InputResponse != nil {
+		return runtime.Outcome{}, fmt.Errorf("Hermes harness has no parked turn to resume")
+	}
+	if strings.TrimSpace(turn.Prompt) == "" {
+		return runtime.Outcome{Failure: &runtime.Failure{Message: "Hermes harness requires a text prompt"}}, nil
+	}
+	// One Actor owns one Hermes conversation. Its key is bound before the
+	// call, so a turn interrupted mid-call continues the same conversation.
+	sessionKey := turn.ContinuationID
+	if sessionKey == "" {
+		sessionKey = NewSessionKey()
+		if err := sink.SessionStarted(runtime.SessionStarted{ContinuationID: sessionKey}); err != nil {
+			return runtime.Outcome{}, err
+		}
+	}
+	c, err := d.ensureGateway(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return runtime.Outcome{}, ctx.Err()
+		}
+		return runtime.Outcome{}, err
+	}
+	var idempotencyKey string
+	if turn.TaskID != "" {
+		idempotencyKey = "kagent-task-" + turn.TaskID
+	}
+	start := d.now()
+	result, err := c.respond(ctx, request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt})
+	if result.Usage != nil {
+		// Hermes reports one total for the turn, which can span several model
+		// requests, so the total counts tokens and opens no model span.
+		sink.ModelCall(runtime.ModelCall{
+			Provider: d.cfg.Provider, RequestModel: d.cfg.Model, ResponseModel: result.Model, ResponseID: result.ID,
+			InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens,
+			Start: start, End: d.now(), UsageOnly: true,
+		})
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return runtime.Outcome{}, ctx.Err()
+		}
+		var turnErr *TurnError
+		if errors.As(err, &turnErr) {
+			logging.FromContext(ctx).WarnContext(ctx, "Hermes turn did not answer", "status", turnErr.Status, "error", turnErr)
+			return runtime.Outcome{Failure: &runtime.Failure{Message: turnErr.Public()}}, nil
+		}
+		return runtime.Outcome{}, err
+	}
+	if err := sink.TextDelta(runtime.TextDelta{Text: result.Text}); err != nil {
+		return runtime.Outcome{}, err
+	}
+	return runtime.Outcome{}, nil
+}
+
+// Close stops the gateway.
+func (d *Driver) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.gateway.stop(d.cfg.StopGrace)
+	d.gateway = nil
+	return nil
+}
+
+// NewSessionKey returns a new random Hermes session key.
+func NewSessionKey() string {
+	return SessionKeyPrefix + uuid.NewString()
+}
+
+// ValidSessionKey reports whether key is one the driver can send to Hermes.
+func ValidSessionKey(key string) error {
+	if !validSessionKey(key) {
+		return fmt.Errorf("invalid Hermes session key")
+	}
+	return nil
+}

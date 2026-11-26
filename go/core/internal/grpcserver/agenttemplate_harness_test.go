@@ -355,6 +355,7 @@ func TestHarnessRuntime(t *testing.T) {
 		harnessRuntimeKagent: {Kagent: &v1alpha3.KagentHarness{}},
 		harnessRuntimeCodex:  {Codex: &v1alpha3.CodexHarness{}},
 		harnessRuntimeClaude: {Claude: &v1alpha3.ClaudeHarness{}},
+		harnessRuntimeHermes: {Hermes: &v1alpha3.HermesHarness{}},
 		harnessRuntimeBYO:    {BYO: &v1alpha3.BYOHarness{}},
 		"":                   {},
 	} {

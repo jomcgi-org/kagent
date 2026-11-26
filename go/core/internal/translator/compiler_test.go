@@ -25,6 +25,7 @@ import (
 	byotranslator "github.com/kagent-dev/kagent/go/core/internal/translator/byo"
 	claudetranslator "github.com/kagent-dev/kagent/go/core/internal/translator/claude"
 	codextranslator "github.com/kagent-dev/kagent/go/core/internal/translator/codex"
+	hermestranslator "github.com/kagent-dev/kagent/go/core/internal/translator/hermes"
 	kagenttranslator "github.com/kagent-dev/kagent/go/core/internal/translator/kagent"
 	"github.com/kagent-dev/kagent/go/core/pkg/egresspolicy"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
@@ -218,6 +219,7 @@ func compilerWithImages(t *testing.T, images *configv1.HarnessImagesConfig, obje
 		translator.HarnessTypeKagent: kagenttranslator.NewCompiler(ctx, collections, testRuntimeDefaults()),
 		translator.HarnessTypeCodex:  codextranslator.NewCompiler(ctx, collections, testRuntimeDefaults()),
 		translator.HarnessTypeClaude: claudetranslator.NewCompiler(ctx, collections, testRuntimeDefaults()),
+		translator.HarnessTypeHermes: hermestranslator.NewCompiler(ctx, collections, testRuntimeDefaults()),
 		translator.HarnessTypeBYO:    byotranslator.NewCompiler(ctx, collections, testRuntimeDefaults()),
 	}, images, testRuntimeDefaults())
 }
@@ -253,7 +255,7 @@ func mockCollections(t *testing.T, objects ...any) translator.Collections {
 
 func TestCompileAgentResolvesWorkerPoolSandboxClass(t *testing.T) {
 	for _, harnessType := range []translator.HarnessType{
-		translator.HarnessTypeKagent, translator.HarnessTypeCodex, translator.HarnessTypeClaude, translator.HarnessTypeBYO,
+		translator.HarnessTypeKagent, translator.HarnessTypeCodex, translator.HarnessTypeClaude, translator.HarnessTypeHermes, translator.HarnessTypeBYO,
 	} {
 		t.Run(string(harnessType), func(t *testing.T) {
 			harness := &v1alpha3.Harness{
@@ -283,6 +285,8 @@ func TestCompileAgentResolvesWorkerPoolSandboxClass(t *testing.T) {
 			case translator.HarnessTypeClaude:
 				harness.Spec.Claude = &v1alpha3.ClaudeHarness{}
 				model.Spec.Provider, model.Spec.Model = v1alpha3.ModelProviderAnthropic, "claude-sonnet-4-5"
+			case translator.HarnessTypeHermes:
+				harness.Spec.Hermes = &v1alpha3.HermesHarness{}
 			case translator.HarnessTypeBYO:
 				harness.Spec.BYO = &v1alpha3.BYOHarness{}
 				harness.Spec.Workload.Command = []string{"/agent"}

@@ -175,7 +175,7 @@ func TestReconciliationReportsRuntimeValidationAsUnsupported(t *testing.T) {
 
 func TestReconciliationWorkerPoolSandboxClass(t *testing.T) {
 	for _, harnessType := range []translator.HarnessType{
-		translator.HarnessTypeKagent, translator.HarnessTypeCodex, translator.HarnessTypeClaude, translator.HarnessTypeBYO,
+		translator.HarnessTypeKagent, translator.HarnessTypeCodex, translator.HarnessTypeClaude, translator.HarnessTypeHermes, translator.HarnessTypeBYO,
 	} {
 		t.Run(string(harnessType), func(t *testing.T) {
 			stop := make(chan struct{})
@@ -207,6 +207,9 @@ func TestReconciliationWorkerPoolSandboxClass(t *testing.T) {
 			case translator.HarnessTypeClaude:
 				runtimeHarness.Spec.Claude = &kagentv1alpha3.ClaudeHarness{}
 				model.Spec.Provider, model.Spec.Model, model.Spec.OpenAI = kagentv1alpha3.ModelProviderAnthropic, "claude-sonnet-4-5", nil
+			case translator.HarnessTypeHermes:
+				runtimeHarness.Spec.Hermes = &kagentv1alpha3.HermesHarness{}
+				model.Spec.Model, model.Spec.OpenAI = "deepseek/deepseek-v4.1-flash", &kagentv1alpha3.OpenAIConfig{BaseURL: "https://openrouter.ai/api/v1"}
 			case translator.HarnessTypeBYO:
 				runtimeHarness.Spec.BYO = &kagentv1alpha3.BYOHarness{}
 				runtimeHarness.Spec.Workload.Command = []string{"/agent"}

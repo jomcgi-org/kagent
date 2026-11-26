@@ -106,12 +106,17 @@ type CodexHarness struct{}
 // ClaudeHarness selects the Claude runtime adapter.
 type ClaudeHarness struct{}
 
+// HermesHarness selects the Hermes Agent runtime adapter. Kagent publishes no
+// built-in Hermes image, so workload.image must name one that contains Hermes
+// Agent and the kagent-hermes adapter.
+type HermesHarness struct{}
+
 // BYOHarness selects an image that implements kagent's private A2A contract.
 type BYOHarness struct{}
 
 // HarnessWorkload identifies the immutable runtime image used by a Harness.
 type HarnessWorkload struct {
-	// Image overrides the release's built-in runtime image. BYO requires an image.
+	// Image overrides the release's built-in runtime image. BYO and Hermes require an image.
 	// When set, it must be an OCI image reference pinned by sha256 digest.
 	// +kubebuilder:validation:Pattern=`^[^[:space:]@]+@sha256:[a-f0-9]{64}$`
 	// +optional
@@ -130,9 +135,10 @@ type HarnessWorkload struct {
 
 // HarnessSpec defines a reusable runtime and its infrastructure policy.
 //
-// +kubebuilder:validation:ExactlyOneOf=kagent;codex;claude;byo
+// +kubebuilder:validation:ExactlyOneOf=kagent;codex;claude;hermes;byo
 // +kubebuilder:validation:XValidation:rule="!has(self.byo) || (has(self.workload) && has(self.workload.command) && size(self.workload.command) > 0)",message="BYO harnesses must specify workload.command"
 // +kubebuilder:validation:XValidation:rule="!has(self.byo) || (has(self.workload) && has(self.workload.image))",message="BYO harnesses must specify workload.image"
+// +kubebuilder:validation:XValidation:rule="!has(self.hermes) || (has(self.workload) && has(self.workload.image))",message="Hermes harnesses must specify workload.image"
 type HarnessSpec struct {
 	// +optional
 	Kagent *KagentHarness `json:"kagent,omitempty"`
@@ -144,9 +150,12 @@ type HarnessSpec struct {
 	Claude *ClaudeHarness `json:"claude,omitempty"`
 
 	// +optional
+	Hermes *HermesHarness `json:"hermes,omitempty"`
+
+	// +optional
 	BYO *BYOHarness `json:"byo,omitempty"`
 
-	// Workload overrides the built-in runtime image and its command. BYO requires it.
+	// Workload overrides the built-in runtime image and its command. BYO and Hermes require it.
 	// +optional
 	Workload HarnessWorkload `json:"workload,omitzero"`
 

@@ -127,6 +127,7 @@ const (
 	RuntimeADKGo  Runtime = conv.KagentRuntimeADKGo
 	RuntimeClaude Runtime = conv.KagentRuntimeClaude
 	RuntimeCodex  Runtime = conv.KagentRuntimeCodex
+	RuntimeHermes Runtime = conv.KagentRuntimeHermes
 )
 
 // NativeHarness reports whether the runtime wraps a native coding agent whose
@@ -135,7 +136,7 @@ const (
 // itself, for the root agent and any sub-agent it transfers to, so its wrapper
 // stays a transport span rather than adding an invocation of its own.
 func (r Runtime) NativeHarness() bool {
-	return r == RuntimeClaude || r == RuntimeCodex
+	return r == RuntimeClaude || r == RuntimeCodex || r == RuntimeHermes
 }
 
 // SDK modes for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
@@ -192,7 +193,7 @@ func (t RuntimeTelemetry) Validate() error {
 		}
 	}
 	switch t.Runtime {
-	case "", RuntimeADKGo, RuntimeClaude, RuntimeCodex:
+	case "", RuntimeADKGo, RuntimeClaude, RuntimeCodex, RuntimeHermes:
 	default:
 		return fmt.Errorf("unsupported runtime %q", t.Runtime)
 	}

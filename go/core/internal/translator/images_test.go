@@ -50,6 +50,15 @@ func TestHarnessImage(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, *harness.Spec.Workload.Image, got)
 	})
+	t.Run("Hermes requires an explicit image", func(t *testing.T) {
+		harness := &HarnessConfiguration{Spec: v1alpha3.HarnessSpec{Hermes: &v1alpha3.HermesHarness{}}}
+		_, err := harnessImage(harness, images)
+		require.ErrorContains(t, err, "Hermes harnesses must specify workload.image")
+		harness.Spec.Workload.Image = new("registry/hermes" + digest)
+		got, err := harnessImage(harness, images)
+		require.NoError(t, err)
+		require.Equal(t, *harness.Spec.Workload.Image, got)
+	})
 	t.Run("only the selected default is needed", func(t *testing.T) {
 		partial := &configv1.HarnessImagesConfig{Kagent: images.GetKagent(), Claude: "invalid"}
 		_, err := harnessImage(&HarnessConfiguration{Spec: v1alpha3.HarnessSpec{Kagent: &v1alpha3.KagentHarness{}}}, partial)
