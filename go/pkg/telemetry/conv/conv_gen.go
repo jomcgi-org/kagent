@@ -252,6 +252,8 @@ const (
 	KagentRuntimeClaude = "claude"
 	// KagentRuntimeCodex: The Codex harness.
 	KagentRuntimeCodex = "codex"
+	// KagentRuntimeHermes: The Hermes Agent harness.
+	KagentRuntimeHermes = "hermes"
 	// KagentRuntimeLangGraph: The LangGraph runtime.
 	KagentRuntimeLangGraph = "langgraph"
 	// KagentRuntimeCrewAI: The CrewAI runtime.

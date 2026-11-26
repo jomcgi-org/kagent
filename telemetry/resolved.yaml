@@ -204,6 +204,10 @@ refinements:
           id: codex
           stability: development
           value: codex
+        - brief: The Hermes Agent harness.
+          id: hermes
+          stability: development
+          value: hermes
         - brief: The LangGraph runtime.
           id: langgraph
           stability: development
@@ -5407,6 +5411,10 @@ registry:
           id: codex
           stability: development
           value: codex
+        - brief: The Hermes Agent harness.
+          id: hermes
+          stability: development
+          value: hermes
         - brief: The LangGraph runtime.
           id: langgraph
           stability: development
@@ -5740,6 +5748,10 @@ registry:
         id: codex
         stability: development
         value: codex
+      - brief: The Hermes Agent harness.
+        id: hermes
+        stability: development
+        value: hermes
       - brief: The LangGraph runtime.
         id: langgraph
         stability: development

@@ -16,13 +16,13 @@ resolved into an immutable runtime revision and a versioned harness config.
 Harness + AgentTemplate
         |
         v
-core/internal/translator/{claude,codex}   controller-side compilation
+core/internal/translator/{claude,codex,hermes}   controller-side compilation
         |
         v
 Bootstrap bundle + environment    immutable Actor inputs
         |
         v
-harness/{claude,codex}/cmd         process entrypoint
+harness/{claude,codex,hermes}/cmd         process entrypoint
         |
         v
 internal/adapter -> internal/driver
@@ -37,6 +37,7 @@ runtime events -> runtime/a2a      private A2A task stream
 | --- | --- |
 | [`claude`](claude/README.md) | Claude Code configuration, materialization, process protocol, and image |
 | [`codex`](codex/README.md) | Codex App Server configuration, JSON-RPC driver, and image |
+| [`hermes`](hermes/README.md) | Hermes Agent configuration, loopback API server driver, and adapter image |
 | [`runtime/runtime.go`](runtime/runtime.go) | Public runtime-neutral turn, event, sink, and outcome model |
 | [`runtime/a2a`](runtime/a2a) | Serializes Actor execution and maps runtime events to upstream A2A events |
 | [`runtime/continuation`](runtime/continuation) | Atomically persists the one native continuation ID owned by an Actor |
@@ -91,4 +92,5 @@ go test ./harness/...
 ```
 
 The root Makefile builds the runtime images with `make build-claude-harness`
-and `make build-codex-harness`.
+and `make build-codex-harness`, and the Hermes adapter image with
+`make build-hermes-runner`.

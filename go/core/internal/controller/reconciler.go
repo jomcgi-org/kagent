@@ -33,6 +33,7 @@ import (
 	byotranslator "github.com/kagent-dev/kagent/go/core/internal/translator/byo"
 	claudetranslator "github.com/kagent-dev/kagent/go/core/internal/translator/claude"
 	codextranslator "github.com/kagent-dev/kagent/go/core/internal/translator/codex"
+	hermestranslator "github.com/kagent-dev/kagent/go/core/internal/translator/hermes"
 	kagenttranslator "github.com/kagent-dev/kagent/go/core/internal/translator/kagent"
 )
 
@@ -142,6 +143,7 @@ func compileAgentTarget(ctx krt.HandlerContext, collections translator.Collectio
 		translator.HarnessTypeKagent: kagenttranslator.NewCompiler(ctx, collections, settings),
 		translator.HarnessTypeCodex:  codextranslator.NewCompiler(ctx, collections, settings),
 		translator.HarnessTypeClaude: claudetranslator.NewCompiler(ctx, collections, settings),
+		translator.HarnessTypeHermes: hermestranslator.NewCompiler(ctx, collections, settings),
 		translator.HarnessTypeBYO:    byotranslator.NewCompiler(ctx, collections, settings),
 	}, images, settings).CompileAgent(context.Background(), agent)
 	if err != nil {

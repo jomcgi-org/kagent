@@ -351,6 +351,8 @@ class KagentRuntimeValues(StrEnum):
     """The Claude Code harness."""
     CODEX = "codex"
     """The Codex harness."""
+    HERMES = "hermes"
+    """The Hermes Agent harness."""
     LANGGRAPH = "langgraph"
     """The LangGraph runtime."""
     CREWAI = "crewai"

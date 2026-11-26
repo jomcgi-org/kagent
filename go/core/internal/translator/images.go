@@ -19,6 +19,10 @@ func harnessImage(harness *HarnessConfiguration, images *configv1.HarnessImagesC
 			selected = images.GetCodex()
 		case HarnessTypeBYO:
 			return "", NewValidationError("BYO harnesses must specify workload.image")
+		case HarnessTypeHermes:
+			// No release publishes a Hermes image: Hermes Agent ships its own,
+			// and the kagent-hermes adapter is added to it downstream.
+			return "", NewValidationError("Hermes harnesses must specify workload.image")
 		}
 		if selected == "" {
 			return "", NewValidationError("no default image configured for %s Harness; configure the release's built-in images or set workload.image", harnessType(harness))

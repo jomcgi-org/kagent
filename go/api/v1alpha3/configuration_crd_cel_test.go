@@ -167,6 +167,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			{"kagent", HarnessSpec{Kagent: &KagentHarness{}}},
 			{"claude", HarnessSpec{Claude: &ClaudeHarness{}}},
 			{"codex", HarnessSpec{Codex: &CodexHarness{}}},
+			{"hermes", HarnessSpec{Hermes: &HermesHarness{}}},
 			{"byo", HarnessSpec{BYO: &BYOHarness{}}},
 		} {
 			for _, workload := range []string{"omitted", "empty"} {
@@ -188,6 +189,8 @@ func TestConfigurationCRDValidation(t *testing.T) {
 					if variant.name == "byo" {
 						require.ErrorContains(t, err, "BYO harnesses must specify workload.image")
 						require.ErrorContains(t, err, "BYO harnesses must specify workload.command")
+					} else if variant.name == "hermes" {
+						require.ErrorContains(t, err, "Hermes harnesses must specify workload.image")
 					} else {
 						require.NoError(t, err)
 						require.NoError(t, cl.Get(ctx, ctrlclient.ObjectKeyFromObject(object), harness))
@@ -206,6 +209,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			{"kagent", HarnessSpec{Kagent: &KagentHarness{}}},
 			{"claude", HarnessSpec{Claude: &ClaudeHarness{}}},
 			{"codex", HarnessSpec{Codex: &CodexHarness{}}},
+			{"hermes", HarnessSpec{Hermes: &HermesHarness{}}},
 			{"byo", HarnessSpec{BYO: &BYOHarness{}, Workload: HarnessWorkload{Command: []string{"/app"}}}},
 		} {
 			for _, imageCase := range []struct {
@@ -223,6 +227,8 @@ func TestConfigurationCRDValidation(t *testing.T) {
 					err := cl.Create(ctx, harness)
 					if imageCase.name == "omitted" && variant.name == "byo" {
 						require.ErrorContains(t, err, "BYO harnesses must specify workload.image")
+					} else if imageCase.name == "omitted" && variant.name == "hermes" {
+						require.ErrorContains(t, err, "Hermes harnesses must specify workload.image")
 					} else if imageCase.name == "empty" || imageCase.name == "tagged" {
 						require.ErrorContains(t, err, "workload.image")
 					} else {
@@ -243,7 +249,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		{
 			name:       "Harness requires one runtime",
 			object:     validHarness(namespace, "harness-no-runtime", HarnessSpec{}),
-			wantReject: "exactly one of the fields in [kagent codex claude byo] must be set",
+			wantReject: "exactly one of the fields in [kagent codex claude hermes byo] must be set",
 		},
 		{
 			name: "Harness rejects multiple runtimes",
@@ -251,7 +257,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 				Kagent: &KagentHarness{},
 				Codex:  &CodexHarness{},
 			}),
-			wantReject: "exactly one of the fields in [kagent codex claude byo] must be set",
+			wantReject: "exactly one of the fields in [kagent codex claude hermes byo] must be set",
 		},
 		{
 			name: "Harness rejects tag-only image",

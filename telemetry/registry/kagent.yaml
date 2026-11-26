@@ -38,6 +38,10 @@ attributes:
           value: codex
           brief: The Codex harness.
           stability: development
+        - id: hermes
+          value: hermes
+          brief: The Hermes Agent harness.
+          stability: development
         - id: langgraph
           value: langgraph
           brief: The LangGraph runtime.

@@ -1,6 +1,7 @@
 # Fork only: not for upstream. Tests and publishes the controller and Codex
 # harness images that jomcgi-org/homelab pins by digest while its Codex
-# bump waits for an upstream kagent release.
+# bump waits for an upstream kagent release, and the hermes-runner image:
+# the kagent-hermes adapter binary that homelab adds to its Hermes Agent image.
 name: jomcgi images
 
 on:
@@ -25,15 +26,30 @@ jobs:
       with:
         go-version-file: go/go.mod
         cache-dependency-path: go/go.sum
-    - name: Test the Codex harness, its compiler and the Substrate client
+    - name: Test the Codex and Hermes harnesses, their compilers and the Substrate client
       working-directory: go
-      run: go test -v -run . ./harness/codex/... ./core/internal/translator/codex/... ./core/internal/substrate/... ./core/pkg/config/...
+      # The controller and gRPC packages also hold envtest and Postgres
+      # tests, so only their Harness selection tests run here.
+      run: |
+        go test -v -run . \
+          ./harness/codex/... ./core/internal/translator/codex/... \
+          ./harness/hermes/... ./harness/runtime/... ./core/internal/translator/hermes/... \
+          ./core/internal/translator ./pkg/tracing/... \
+          ./core/internal/substrate/... ./core/pkg/config/...
+        go test -v -run 'TestReconciliationWorkerPoolSandboxClass|TestHarnessRuntime' \
+          ./core/internal/controller ./core/internal/grpcserver
+    - name: Test the CRD validation rules against envtest
+      working-directory: go
+      run: |
+        version=$(go list -m -f '{{ .Version }}' k8s.io/api | awk -F'[v.]' '{printf "1.%d", $3}')
+        KUBEBUILDER_ASSETS="$(go tool setup-envtest use "$version" --bin-dir "$RUNNER_TEMP/envtest" -p path)" \
+          go test -v -run . ./api/v1alpha3
 
   push-images:
     needs: test
     strategy:
       matrix:
-        image: [controller, codex-harness]
+        image: [controller, codex-harness, hermes-runner]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
