@@ -78,9 +78,12 @@ session; `conversation` makes Hermes 0.23.4 chain the transcript.
 
 The first turn starts the gateway, never actor start-up: a golden snapshot
 restore gives `/data` new backing files, which would break the SQLite files a
-running gateway holds open. Before each turn the adapter checks `/health`. If
-the gateway exited or fails the check, the adapter stops it, rewrites
-`HERMES_HOME`, and starts a new one.
+running gateway holds open. Hermes' `/health` does not read that state, so
+before each turn the adapter also checks that `config.yaml` is still the file
+it wrote at start. If the gateway exited, `HERMES_HOME` was replaced, or
+`/health` fails, the adapter stops it, rewrites `HERMES_HOME`, and starts a
+new one. A turn that hits the client timeout also stops the gateway, so the
+next turn gets a new one.
 
 ## Limits
 

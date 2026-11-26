@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +40,9 @@ type gateway struct {
 	port    int
 	key     string
 	output  io.Writer
+	// marker is config.yaml as written for this start. A restore that
+	// replaces /data replaces it too.
+	marker  os.FileInfo
 	cmd     *exec.Cmd
 	exited  chan struct{}
 	exitErr error
@@ -69,6 +74,17 @@ func gatewayEnvironment(parent []string, home string, port int, key string) []st
 		"API_SERVER_PORT="+strconv.Itoa(port),
 		"API_SERVER_KEY="+key,
 	)
+}
+
+func (g *gateway) markerPath() string {
+	return filepath.Join(g.home, "config.yaml")
+}
+
+// homeUnchanged reports whether HERMES_HOME still holds the config.yaml this
+// gateway started with.
+func (g *gateway) homeUnchanged() bool {
+	current, err := os.Stat(g.markerPath())
+	return err == nil && g.marker != nil && os.SameFile(g.marker, current)
 }
 
 func (g *gateway) url() string {

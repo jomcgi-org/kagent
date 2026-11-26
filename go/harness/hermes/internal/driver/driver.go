@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -91,12 +92,18 @@ func (d *Driver) Start(ctx context.Context) error {
 //
 // The gateway starts lazily, never before a golden snapshot: a restore gives
 // /data new backing files, which would break the SQLite files a running
-// gateway holds open. Each start first rewrites HERMES_HOME, so a restored
-// /data cannot carry an older config.yaml or a .env.
+// gateway holds open. Hermes' /health does not read that state, so the driver
+// also compares the config.yaml it wrote at start with the one HERMES_HOME
+// holds now; a different file means /data was replaced. Each start first
+// rewrites HERMES_HOME, so a restored /data cannot carry an older config.yaml
+// or a .env.
 func (d *Driver) ensureGateway(ctx context.Context) (*client, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.gateway.running() && !d.gateway.healthy(ctx, d.http) {
+	if d.gateway.running() && !d.gateway.homeUnchanged() {
+		logging.FromContext(ctx).WarnContext(ctx, "HERMES_HOME was replaced under the Hermes gateway; starting it again")
+		d.gateway.stop(d.cfg.StopGrace)
+	} else if d.gateway.running() && !d.gateway.healthy(ctx, d.http) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -111,11 +118,16 @@ func (d *Driver) ensureGateway(ctx context.Context) (*client, error) {
 			return nil, err
 		}
 		g := &gateway{command: d.cfg.GatewayCommand, home: d.cfg.Home, port: d.cfg.Port, key: d.key, output: d.cfg.Output}
+		marker, err := os.Stat(g.markerPath())
+		if err != nil {
+			return nil, fmt.Errorf("stat Hermes config: %w", err)
+		}
+		g.marker = marker
 		if err := g.start(d.cfg.Environment); err != nil {
 			return nil, err
 		}
 		startCtx, cancel := context.WithTimeout(ctx, d.cfg.StartupTimeout)
-		err := g.waitHealthy(startCtx, d.http)
+		err = g.waitHealthy(startCtx, d.http)
 		cancel()
 		if err != nil {
 			g.stop(d.cfg.StopGrace)
@@ -170,6 +182,13 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		if ctx.Err() != nil {
 			return runtime.Outcome{}, ctx.Err()
 		}
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			// A gateway whose /health answers while its responses hang would
+			// pass the next health check, so replace it on the next turn.
+			logging.FromContext(ctx).WarnContext(ctx, "Hermes turn timed out; stopping the gateway")
+			d.stopGateway()
+		}
 		var turnErr *TurnError
 		if errors.As(err, &turnErr) {
 			logging.FromContext(ctx).WarnContext(ctx, "Hermes turn did not answer", "status", turnErr.Status, "error", turnErr)
@@ -185,11 +204,15 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 
 // Close stops the gateway.
 func (d *Driver) Close() error {
+	d.stopGateway()
+	return nil
+}
+
+func (d *Driver) stopGateway() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.gateway.stop(d.cfg.StopGrace)
 	d.gateway = nil
-	return nil
 }
 
 // NewSessionKey returns a new random Hermes session key.

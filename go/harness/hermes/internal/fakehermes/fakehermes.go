@@ -88,9 +88,10 @@ func serve() error {
 	if err := os.WriteFile(filepath.Join(home, "fake-env.txt"), []byte(strings.Join(os.Environ(), "\n")), 0o600); err != nil {
 		return err
 	}
-	// Like Hermes' open SQLite state, the fake holds a file in HERMES_HOME.
-	// When a restore replaces the directory, the held file no longer backs
-	// HERMES_HOME, and the fake reports itself unhealthy instead of exiting.
+	// Like Hermes' open SQLite response store, the fake holds a file in
+	// HERMES_HOME. When a restore replaces the directory, the held file no
+	// longer backs HERMES_HOME and turns fail, while /health, like Hermes'
+	// own, still answers ok.
 	held, err := os.Open(filepath.Join(home, "fake-env.txt"))
 	if err != nil {
 		return err
@@ -106,13 +107,7 @@ func serve() error {
 	}
 	var mu sync.Mutex
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		if !backed() {
-			http.Error(w, `{"status":"state moved"}`, http.StatusServiceUnavailable)
-			return
-		}
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ok"}`)) })
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Input        string `json:"input"`

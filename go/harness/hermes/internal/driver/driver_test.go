@@ -295,8 +295,9 @@ func TestRunRejectsInputResponse(t *testing.T) {
 	require.ErrorContains(t, err, "no parked turn")
 }
 
-// A snapshot restore gives /data new backing files. The next turn finds the
-// gateway unhealthy, rewrites HERMES_HOME, and starts a new gateway.
+// A snapshot restore gives /data new backing files while /health still
+// answers ok. The next turn sees that config.yaml is not the file it wrote,
+// rewrites HERMES_HOME, and starts a new gateway.
 func TestRunRestartsAfterDataReplacement(t *testing.T) {
 	d, home := newFakeDriver(t, os.Environ())
 	_, err := os.Stat(filepath.Join(home, "config.yaml"))
@@ -328,6 +329,24 @@ func TestRunRestartsAfterDataReplacement(t *testing.T) {
 	requests, err := fakehermes.Requests(home)
 	require.NoError(t, err)
 	require.Len(t, requests, 1, "the second turn reaches the new gateway")
+}
+
+// A gateway whose /health answers while a response hangs is stopped at the
+// client timeout and replaced on the next turn.
+func TestRunReplacesAGatewayAfterATurnTimeout(t *testing.T) {
+	d, _ := newFakeDriver(t, os.Environ())
+	d.http.Timeout = time.Second
+	_, err := d.Run(t.Context(), runtime.Turn{TaskID: "t1", Prompt: "slow", ContinuationID: "kagent-fixed"}, &recordingSink{})
+	require.Error(t, err)
+	d.mu.Lock()
+	stopped := d.gateway == nil
+	d.mu.Unlock()
+	require.True(t, stopped, "a timed-out gateway must be stopped")
+	sink := &recordingSink{}
+	outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: "t2", Prompt: "back", ContinuationID: "kagent-fixed"}, sink)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Equal(t, "echo: back", sink.text.String())
 }
 
 func TestValidateRequiresGatewayExecutable(t *testing.T) {
