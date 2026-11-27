@@ -139,7 +139,10 @@ var toolsetSelectors = []string{
 // ReservedMCPServerName reports whether Hermes would read name in
 // platform_toolsets as a built-in or composite toolset, not an MCP server.
 func ReservedMCPServerName(name string) bool {
-	return slices.Contains(BuiltinToolsets, name) || slices.Contains(toolsetSelectors, name) || strings.HasPrefix(name, "hermes")
+	// Hermes names each server's toolset mcp-<name>, and resolves a listed
+	// mcp-<name> to server <name>.
+	return slices.Contains(BuiltinToolsets, name) || slices.Contains(toolsetSelectors, name) ||
+		strings.HasPrefix(name, "hermes") || strings.HasPrefix(name, "mcp-")
 }
 
 // Production returns the configuration the compiler emits for model.

@@ -125,9 +125,8 @@ spec:
                         type: boolean
                       webFetch:
                         description: |-
-                          WebFetch adds web_fetch: web_fetch_20260209 with codeExecution on a
-                          model that supports it, else web_fetch_20250910. It fetches only URLs
-                          that are already in the conversation.
+                          WebFetch adds web_fetch (web_fetch_20250910, direct calls). It fetches
+                          only URLs that are already in the conversation.
                         properties:
                           maxUses:
                             description: |-
@@ -141,9 +140,8 @@ spec:
                         - maxUses
                         type: object
                       webSearch:
-                        description: |-
-                          WebSearch adds web_search: web_search_20260209 with codeExecution on a
-                          model that supports it, else web_search_20250305.
+                        description: WebSearch adds web_search (web_search_20250305,
+                          direct calls).
                         properties:
                           maxUses:
                             description: |-

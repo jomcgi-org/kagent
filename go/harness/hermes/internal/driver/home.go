@@ -254,7 +254,7 @@ func RenderConfig(s Settings) ([]byte, error) {
 	}
 	plugins := pluginsConfig{Enabled: []string{}}
 	if s.ServerTools != nil {
-		if _, err := serverToolsJSON(*s.ServerTools, s.Model); err != nil {
+		if _, err := serverToolsJSON(*s.ServerTools); err != nil {
 			return nil, err
 		}
 		plugins.Enabled = []string{ServerToolsPlugin}
@@ -317,28 +317,16 @@ type serverToolsFile struct {
 	Tools []map[string]any `json:"tools"`
 }
 
-// dynamicWebModels are the model ID prefixes whose web tools may filter
-// results with code execution (web_search_20260209, web_fetch_20260209).
-// Another model, such as Haiku 4.5, rejects those versions.
-var dynamicWebModels = []string{
-	"claude-fable", "claude-mythos", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
-	"claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6",
-}
-
 // serverToolsJSON returns the plugin's server_tools.json: the Anthropic tool
 // entries in a fixed order, so each request sends identical tools.
-func serverToolsJSON(t ServerTools, model string) ([]byte, error) {
+func serverToolsJSON(t ServerTools) ([]byte, error) {
 	if t.WebSearchMaxUses < 0 || t.WebSearchMaxUses > 20 || t.WebFetchMaxUses < 0 || t.WebFetchMaxUses > 20 {
 		return nil, fmt.Errorf("hermes server tool max uses must be between 0 and 20")
 	}
-	// The 20260209 web tools filter results with code execution, so they
-	// come only with codeExecution and on a model that supports them;
-	// otherwise the basic versions, which run no code.
+	// The basic web tools call directly. The 20260209 versions call through
+	// code execution, which disable_parallel_tool_use (plugin/__init__.py)
+	// does not support.
 	search, fetch := "web_search_20250305", "web_fetch_20250910"
-	dynamic := slices.ContainsFunc(dynamicWebModels, func(prefix string) bool { return strings.HasPrefix(model, prefix) })
-	if t.CodeExecution && dynamic {
-		search, fetch = "web_search_20260209", "web_fetch_20260209"
-	}
 	var tools []map[string]any
 	if t.WebSearchMaxUses > 0 {
 		tools = append(tools, map[string]any{"type": search, "name": "web_search", "max_uses": t.WebSearchMaxUses})
@@ -380,12 +368,12 @@ func WriteHome(home string, s Settings) error {
 	if err := utils.ReplacePrivateFile(filepath.Join(home, "hindsight", "config.json"), hindsight); err != nil {
 		return fmt.Errorf("write Hermes hindsight config: %w", err)
 	}
-	return writeServerToolsPlugin(home, s.ServerTools, s.Model)
+	return writeServerToolsPlugin(home, s.ServerTools)
 }
 
 // writeServerToolsPlugin replaces the plugin directory, or removes it when no
 // server tool is selected, so a plugin from an earlier start never loads.
-func writeServerToolsPlugin(home string, tools *ServerTools, model string) error {
+func writeServerToolsPlugin(home string, tools *ServerTools) error {
 	dir := filepath.Join(home, "plugins", ServerToolsPlugin)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("remove Hermes server tools plugin: %w", err)
@@ -393,7 +381,7 @@ func writeServerToolsPlugin(home string, tools *ServerTools, model string) error
 	if tools == nil {
 		return nil
 	}
-	config, err := serverToolsJSON(*tools, model)
+	config, err := serverToolsJSON(*tools)
 	if err != nil {
 		return err
 	}

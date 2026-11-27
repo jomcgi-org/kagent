@@ -58,7 +58,7 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   header or `actorJwt` holds the credential placeholder, and the egress
   gateway injects the value. The compiler and the runner reject an MCP
   server named like a Hermes toolset or selector, such as `memory` or
-  `onboarding`.
+  `onboarding`, or starting with `mcp-`, Hermes's toolset name for a server.
 - Anthropic server tools from `spec.hermes.serverTools` (`webSearch`,
   `webFetch` with `maxUses`, and `codeExecution`). They need a ModelConfig
   with the Anthropic provider. Hermes 0.23.4 builds the Anthropic `tools`
@@ -70,11 +70,10 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   plugin also sets `thinking.block_binding.prefix_mismatch_behavior:
   drop_block` (beta `thinking-binding-controls-2026-08-01`) on adaptive
   thinking, and adds adaptive thinking only on models that always think.
-  The web tools are the 20260209 versions only with `codeExecution` on a
-  model that supports them; otherwise the basic versions
-  (`web_search_20250305`, `web_fetch_20250910`), which run no code. The
-  plugin also sets `disable_parallel_tool_use`, so a model step makes at most
-  one tool call.
+  The web tools are the basic, direct-call versions (`web_search_20250305`,
+  `web_fetch_20250910`). The plugin sets `disable_parallel_tool_use`, so a
+  model step makes at most one tool call, and that setting does not support
+  the 20260209 versions, which call through code execution.
 - MCP entries carry the RemoteMCPServer default 30 s `timeout` and
   `strict_redirect_headers: true`, which keeps headers on the configured
   origin and turns off the SSE fallback. A URL, tool name or header value
