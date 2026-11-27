@@ -55,6 +55,9 @@ func TestParseRejectsInvalidConfig(t *testing.T) {
 		{"MCP toolset name", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"memory": {URL: "https://m.example.com/mcp", Tools: []string{"t"}}}
 		}, "Hermes toolset name"},
+		{"MCP toolset selector", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{"onboarding": {URL: "https://m.example.com/mcp", Tools: []string{"t"}}}
+		}, "Hermes toolset name"},
 		{"MCP URL variable", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"m": {URL: "https://m.example.com/mcp?k=${API_SERVER_KEY}", Tools: []string{"t"}}}
 		}, "url must not reference variables"},

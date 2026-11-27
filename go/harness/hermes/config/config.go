@@ -129,10 +129,17 @@ var BuiltinToolsets = []string{
 	"terminal", "todo", "tts", "video", "video_gen", "vision", "web", "x_search",
 }
 
+// toolsetSelectors are the other names Hermes v0.23.4 resolves in
+// platform_toolsets before an MCP server (toolsets.py TOOLSETS keys and
+// selectors). A server so named would merge into that toolset.
+var toolsetSelectors = []string{
+	"all", "bot_room", "coding", "context_engine", "debugging", "no_mcp", "onboarding", "safe",
+}
+
 // ReservedMCPServerName reports whether Hermes would read name in
 // platform_toolsets as a built-in or composite toolset, not an MCP server.
 func ReservedMCPServerName(name string) bool {
-	return slices.Contains(BuiltinToolsets, name) || strings.HasPrefix(name, "hermes") || name == "no_mcp"
+	return slices.Contains(BuiltinToolsets, name) || slices.Contains(toolsetSelectors, name) || strings.HasPrefix(name, "hermes")
 }
 
 // Production returns the configuration the compiler emits for model.

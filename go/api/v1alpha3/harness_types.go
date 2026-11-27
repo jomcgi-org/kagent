@@ -125,11 +125,13 @@ type HermesHarness struct {
 // HermesServerTools selects Anthropic server tools. Each unset field leaves
 // its tool out.
 type HermesServerTools struct {
-	// WebSearch adds web_search (type web_search_20260209).
+	// WebSearch adds web_search: web_search_20260209 with codeExecution on a
+	// model that supports it, else web_search_20250305.
 	// +optional
 	WebSearch *HermesServerToolLimit `json:"webSearch,omitempty"`
 
-	// WebFetch adds web_fetch (type web_fetch_20260209). It fetches only URLs
+	// WebFetch adds web_fetch: web_fetch_20260209 with codeExecution on a
+	// model that supports it, else web_fetch_20250910. It fetches only URLs
 	// that are already in the conversation.
 	// +optional
 	WebFetch *HermesServerToolLimit `json:"webFetch,omitempty"`

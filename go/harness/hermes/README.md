@@ -57,7 +57,8 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   and Tool Search is off, so each MCP tool is in the request itself. A Secret
   header or `actorJwt` holds the credential placeholder, and the egress
   gateway injects the value. The compiler and the runner reject an MCP
-  server named like a Hermes toolset, such as `memory`.
+  server named like a Hermes toolset or selector, such as `memory` or
+  `onboarding`.
 - Anthropic server tools from `spec.hermes.serverTools` (`webSearch`,
   `webFetch` with `maxUses`, and `codeExecution`). They need a ModelConfig
   with the Anthropic provider. Hermes 0.23.4 builds the Anthropic `tools`
@@ -69,8 +70,11 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   plugin also sets `thinking.block_binding.prefix_mismatch_behavior:
   drop_block` (beta `thinking-binding-controls-2026-08-01`) on adaptive
   thinking, and adds adaptive thinking only on models that always think.
-  Without `codeExecution`, the web tools are the basic versions
-  (`web_search_20250305`, `web_fetch_20250910`), which run no code.
+  The web tools are the 20260209 versions only with `codeExecution` on a
+  model that supports them; otherwise the basic versions
+  (`web_search_20250305`, `web_fetch_20250910`), which run no code. The
+  plugin also sets `disable_parallel_tool_use`, so a model step makes at most
+  one tool call.
 - MCP entries carry the RemoteMCPServer default 30 s `timeout` and
   `strict_redirect_headers: true`, which keeps headers on the configured
   origin and turns off the SSE fallback. A URL, tool name or header value
@@ -81,9 +85,9 @@ Server tool limits, not handled yet:
 - A `pause_turn` stop (Anthropic's server loop reached its limit) maps to
   `stop`, so the turn ends with the text so far. `maxUses` keeps the loop
   short.
-- If one response holds an MCP `tool_use` and a server tool that is still
-  pending, Hermes drops the server block when it sends the MCP result, so
-  that server call does not finish. Completed server blocks are dropped
+- Hermes drops server tool blocks when it replays history. A server call
+  still pending next to an MCP call would then never finish, so the plugin
+  allows one tool call per model step. Completed server blocks are dropped
   too, which only removes them from history.
 - Each Messages request gets a new code execution container; files do not
   carry over between model steps.

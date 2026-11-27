@@ -40,11 +40,21 @@ def add_server_tools(request=None, api_mode=None, **_):
     tools = [t for t in request.get("tools") or [] if isinstance(t, dict)]
     names = {t.get("name") for t in tools}
     request["tools"] = tools + [dict(t) for t in _TOOLS if t["name"] not in names]
+    # One tool call per model step. A server call next to an MCP call can
+    # still be pending when the step stops for the MCP call, and Hermes drops
+    # the server block when it sends the MCP result, so that call would
+    # never finish.
+    choice = request.get("tool_choice")
+    if choice is None:
+        choice = {"type": "auto"}
+    if isinstance(choice, dict) and choice.get("type") in ("auto", "any", "tool"):
+        request["tool_choice"] = {**choice, "disable_parallel_tool_use": True}
     # block_binding works only with adaptive thinking. Keep the adapter's
     # mode; add adaptive thinking only where the model always thinks, so an
     # omitted field and adaptive are the same request.
     thinking = request.get("thinking")
-    if thinking is None and str(request.get("model", "")).startswith(_ALWAYS_THINKING):
+    model = str(request.get("model", "")).lower()
+    if thinking is None and any(name in model for name in _ALWAYS_THINKING):
         thinking = {"type": "adaptive"}
     if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
         thinking = dict(thinking)

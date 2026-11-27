@@ -145,7 +145,7 @@ func TestRenderConfigEnablesOnlyListedMCPTools(t *testing.T) {
 
 func TestWriteHomeWritesAndRemovesServerToolsPlugin(t *testing.T) {
 	home := t.TempDir()
-	settings := Settings{Model: "m", BaseURL: "https://api.anthropic.com", ServerTools: &ServerTools{WebSearchMaxUses: 5, WebFetchMaxUses: 3, CodeExecution: true}}
+	settings := Settings{Model: "claude-opus-5-5", BaseURL: "https://api.anthropic.com", ServerTools: &ServerTools{WebSearchMaxUses: 5, WebFetchMaxUses: 3, CodeExecution: true}}
 	require.NoError(t, WriteHome(home, settings))
 	raw, err := os.ReadFile(filepath.Join(home, "config.yaml"))
 	require.NoError(t, err)
@@ -173,11 +173,19 @@ func TestWriteHomeWritesAndRemovesServerToolsPlugin(t *testing.T) {
 	require.ErrorContains(t, err, "select no tool")
 
 	// Without code execution, the basic web tools, which run no code.
-	raw, err = serverToolsJSON(ServerTools{WebSearchMaxUses: 2, WebFetchMaxUses: 1})
+	basic := `{"tools":[
+		{"type":"web_search_20250305","name":"web_search","max_uses":2},
+		{"type":"web_fetch_20250910","name":"web_fetch","max_uses":1}]}`
+	raw, err = serverToolsJSON(ServerTools{WebSearchMaxUses: 2, WebFetchMaxUses: 1}, "claude-opus-5-5")
+	require.NoError(t, err)
+	require.JSONEq(t, basic, string(raw))
+	// Haiku 4.5 runs code execution but rejects the dynamic web tools.
+	raw, err = serverToolsJSON(ServerTools{WebSearchMaxUses: 2, WebFetchMaxUses: 1, CodeExecution: true}, "claude-haiku-4-5")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"tools":[
 		{"type":"web_search_20250305","name":"web_search","max_uses":2},
-		{"type":"web_fetch_20250910","name":"web_fetch","max_uses":1}]}`, string(raw))
+		{"type":"web_fetch_20250910","name":"web_fetch","max_uses":1},
+		{"type":"code_execution_20260521","name":"code_execution"}]}`, string(raw))
 }
 
 func TestWriteHomeReplacesConfigAndRemovesEnvFile(t *testing.T) {
