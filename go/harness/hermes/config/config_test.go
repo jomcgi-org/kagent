@@ -40,6 +40,9 @@ func TestParseRejectsInvalidConfig(t *testing.T) {
 		{"port", func(c *Config) { c.APIServerPort = 0 }, "api_server_port"},
 		{"limits", func(c *Config) { c.TurnTimeoutMillis = 0 }, "must be positive"},
 		{"log level", func(c *Config) { c.LogLevel = "trace" }, "log_level"},
+		{"compression threshold", func(c *Config) { c.CompressionThresholdTokens = -1 }, "compression_threshold_tokens"},
+		{"compression tail", func(c *Config) { c.CompressionMinTailUserMessages = -1 }, "compression_min_tail_user_messages"},
+		{"compression model", func(c *Config) { c.CompressionModel = "a b" }, "compression_model"},
 		{"runtime", func(c *Config) {
 			c.RuntimeTelemetry = tracing.RuntimeTelemetry{Runtime: tracing.RuntimeCodex, AgentName: "a", AgentNamespace: "n"}
 		}, "names runtime"},

@@ -36,7 +36,11 @@ func New(_ context.Context, input Input) (*driver.Driver, error) {
 	// snapshot restore can replace /data after this runs.
 	return driver.New(driver.Config{
 		GatewayCommand: cfg.GatewayCommand, Home: config.HermesHome(input.DurableDir), Port: cfg.APIServerPort,
-		Settings:     driver.Settings{Model: cfg.Model, BaseURL: cfg.BaseURL, APIKey: lookup(input.Environment, config.APIKeyEnvName)},
+		Settings: driver.Settings{
+			Model: cfg.Model, BaseURL: cfg.BaseURL, APIKey: lookup(input.Environment, config.APIKeyEnvName),
+			CompressionThresholdTokens: cfg.CompressionThresholdTokens, CompressionMinTailUserMessages: cfg.CompressionMinTailUserMessages,
+			CompressionModel: cfg.CompressionModel,
+		},
 		Instructions: cfg.Instructions, Model: cfg.Model, Provider: cfg.RuntimeTelemetry.Provider,
 		Environment: input.Environment, StartupTimeout: cfg.StartupTimeout(), TurnTimeout: cfg.TurnTimeout(),
 		StopGrace: cfg.StopGrace(), MaxBytes: cfg.MaxResponseBytes, Output: input.Output,

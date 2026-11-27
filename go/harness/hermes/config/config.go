@@ -55,6 +55,15 @@ type Config struct {
 	BaseURL string `json:"base_url"`
 	// Instructions is the compiled system prompt, sent with every turn.
 	Instructions string `json:"instructions,omitempty"`
+	// CompressionThresholdTokens is Hermes's compression.threshold_tokens.
+	// Zero keeps Hermes's ratio-only trigger.
+	CompressionThresholdTokens int `json:"compression_threshold_tokens,omitempty"`
+	// CompressionMinTailUserMessages is compression.min_tail_user_messages.
+	// Zero keeps Hermes's default.
+	CompressionMinTailUserMessages int `json:"compression_min_tail_user_messages,omitempty"`
+	// CompressionModel is the summary model, called through the same endpoint
+	// as Model. Empty means Model.
+	CompressionModel string `json:"compression_model,omitempty"`
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy. It is absent for standalone runs.
 	RuntimeTelemetry     tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
@@ -113,6 +122,15 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Model) == "" {
 		return fmt.Errorf("model is required")
+	}
+	if c.CompressionThresholdTokens < 0 {
+		return fmt.Errorf("compression_threshold_tokens must be nonnegative")
+	}
+	if c.CompressionMinTailUserMessages < 0 {
+		return fmt.Errorf("compression_min_tail_user_messages must be nonnegative")
+	}
+	if c.CompressionModel != strings.TrimSpace(c.CompressionModel) || strings.ContainsAny(c.CompressionModel, " \t\r\n") {
+		return fmt.Errorf("compression_model must not contain whitespace")
 	}
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
