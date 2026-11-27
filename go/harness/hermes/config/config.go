@@ -244,7 +244,31 @@ func (c Config) APIKeyEnv() string {
 	return APIKeyEnvName
 }
 
+// hermesNamePart is Hermes's sanitize_mcp_name_component: it names a tool
+// mcp__<server>__<tool> with every character outside [A-Za-z0-9_] as _.
+var hermesNamePart = regexp.MustCompile(`[^A-Za-z0-9_]`)
+
 func (c Config) validateTools() error {
+	// Hermes registers the first of two tools with the same final name and
+	// skips the other, so distinct servers or tools must stay distinct.
+	sanitized := map[string]string{}
+	for name := range c.MCPServers {
+		key := hermesNamePart.ReplaceAllString(name, "_")
+		if other, ok := sanitized[key]; ok {
+			return fmt.Errorf("mcp_servers %q and %q have the same Hermes tool prefix %q", other, name, key)
+		}
+		sanitized[key] = name
+	}
+	for name, server := range c.MCPServers {
+		tools := map[string]string{}
+		for _, tool := range server.Tools {
+			key := hermesNamePart.ReplaceAllString(tool, "_")
+			if other, ok := tools[key]; ok && other != tool {
+				return fmt.Errorf("mcp_servers %q tools %q and %q have the same Hermes name", name, other, tool)
+			}
+			tools[key] = tool
+		}
+	}
 	for name, server := range c.MCPServers {
 		if !mcpServerName.MatchString(name) {
 			return fmt.Errorf("mcp_servers name %q must match %s", name, mcpServerName)

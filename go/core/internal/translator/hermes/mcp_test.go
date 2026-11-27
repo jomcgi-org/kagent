@@ -148,3 +148,13 @@ func TestCompileAnthropicWithServerToolsAndMCP(t *testing.T) {
 		t.Fatalf("egress = %s, want %s", got, want)
 	}
 }
+
+func TestCompileMCPRejectsServersWithOneHermesName(t *testing.T) {
+	input, collections := testInput(t, openRouter(v1alpha3.ModelConfigSpec{}), nil)
+	bindMCP(input, mcpServer("foo-bar", "https://a.example.com/mcp"), "lookup")
+	bindMCP(input, mcpServer("foo.bar", "https://b.example.com/mcp"), "lookup")
+	_, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "same Hermes tool prefix") {
+		t.Fatalf("Compile() error = %v", err)
+	}
+}

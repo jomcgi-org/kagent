@@ -58,6 +58,15 @@ func TestParseRejectsInvalidConfig(t *testing.T) {
 		{"MCP toolset selector", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"onboarding": {URL: "https://m.example.com/mcp", Tools: []string{"t"}}}
 		}, "Hermes toolset name"},
+		{"MCP sanitized server names", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{
+				"foo-bar": {URL: "https://m.example.com/mcp", Tools: []string{"t"}},
+				"foo_bar": {URL: "https://n.example.com/mcp", Tools: []string{"t"}},
+			}
+		}, "same Hermes tool prefix"},
+		{"MCP sanitized tool names", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{"m": {URL: "https://m.example.com/mcp", Tools: []string{"a-b", "a_b"}}}
+		}, "same Hermes name"},
 		{"MCP canonical toolset name", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"mcp-foo": {URL: "https://m.example.com/mcp", Tools: []string{"t"}}}
 		}, "Hermes toolset name"},
