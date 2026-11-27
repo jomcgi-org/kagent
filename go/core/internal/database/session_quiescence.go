@@ -25,13 +25,39 @@ type SessionQuiescence struct {
 // dispatch, checkpoints, lifecycle operations, or row locks. Already claimed
 // work is excluded: its runtime outcome may be uncertain and cannot be retried
 // by another worker. Suspended/deleted sessions need no automatic runtime work.
+// idleSuspendDue holds a settled turn's runtime until its revision's idle
+// suspend delay passes, or until a checkpoint expedites it. A new turn clears
+// quiescence_pending, which restarts the delay at the next settlement. Pending
+// work that is not yet due is not reported, so idle workers wait for the
+// recovery scan or a wake instead of polling.
+const idleSuspendDue = `(e.quiescence_expedited OR e.created_at <= clock_timestamp() - rr.idle_suspend_delay_ms * interval '1 millisecond')`
+
+// ExpediteSessionQuiescence ends the idle suspend delay of the session's
+// unclaimed settled turn, so a checkpoint waiting on its snapshot gets one.
+// It reports whether any held turn was expedited.
+func (c *Client) ExpediteSessionQuiescence(ctx context.Context, sessionID string) (bool, error) {
+	tag, err := c.db.Exec(ctx, `
+		UPDATE session_task_event e SET quiescence_expedited = TRUE
+		FROM session_record i
+		WHERE i.id = $1::uuid AND e.history_id = i.history_id
+		  AND e.quiescence_pending AND e.quiescence_executor_id IS NULL
+		  AND NOT e.quiescence_expedited
+	`, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("expedite Session %s quiescence: %w", sessionID, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) {
 	return queryOne(ctx, c.db, `
 		SELECT EXISTS (
 			SELECT 1 FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
+			JOIN runtime_revision rr ON rr.revision = i.prepared_revision
 			WHERE e.published AND e.quiescence_pending = TRUE
 			  AND e.quiescence_executor_id IS NULL
 			  AND i.state = 'RUNTIME_STATE_READY'
+			  AND `+idleSuspendDue+`
 		)
 	`, pgx.RowTo[bool])
 }
@@ -51,7 +77,9 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 		row, err := queryOne(ctx, tx, `
 			SELECT i.id::text AS session_id, e.task_id, e.sequence
 			FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
+			JOIN runtime_revision rr ON rr.revision = i.prepared_revision
 			WHERE e.published AND e.quiescence_pending = TRUE
+			  AND `+idleSuspendDue+`
 			  AND e.quiescence_executor_id IS NULL
 			  AND i.state = 'RUNTIME_STATE_READY'
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'

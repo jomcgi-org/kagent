@@ -540,3 +540,37 @@ func TestCheckpointRejectsOlderPendingTask(t *testing.T) {
 	require.ErrorIs(t, err, ErrFailedPrecondition)
 	require.ErrorContains(t, err, "all tasks to be terminal")
 }
+
+func TestIdleSuspendDelayHoldsQuiescenceUntilDue(t *testing.T) {
+	db := setupTestDB(t)
+	client := NewClient(db, "public")
+	sessionFixture(t, client, t.Context(), "team-a", "revision", "assistant", "kagent")
+	session, waiting := waitingTaskFixture(t, client)
+	reply := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("PostgreSQL"))
+	reply.TaskID, reply.ContextID = waiting.ID, waiting.ContextID
+	current, initialVersion := resumeRuntimeTask(t, client, session.Id, reply)
+	finished := *current
+	finished.Status = a2a.TaskStatus{State: a2a.TaskStateCompleted, Message: a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("done"))}
+	hash := sha256.Sum256([]byte("complete"))
+	version, err := client.UpdateSessionTask(t.Context(), session.Id, initialVersion, hash[:], &finished, &finished, "")
+	require.NoError(t, err)
+	_, err = db.Exec(t.Context(), `UPDATE runtime_revision SET idle_suspend_delay_ms = 600000 WHERE revision = 'revision'`)
+	require.NoError(t, err)
+	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(waiting.ID), version))
+
+	_, err = client.ClaimSessionQuiescence(t.Context())
+	require.ErrorIs(t, err, ErrNotFound) // The runtime stays warm inside the delay.
+	pending, err := client.HasPendingSessionQuiescence(t.Context())
+	require.NoError(t, err)
+	require.False(t, pending) // Workers wait for the recovery scan instead of polling.
+
+	expedited, err := client.ExpediteSessionQuiescence(t.Context(), session.Id)
+	require.NoError(t, err)
+	require.True(t, expedited) // A checkpoint needs the held turn's snapshot now.
+	pending, err = client.HasPendingSessionQuiescence(t.Context())
+	require.NoError(t, err)
+	require.True(t, pending)
+	work, err := client.ClaimSessionQuiescence(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, version, work.Version)
+}

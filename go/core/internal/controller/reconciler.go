@@ -419,6 +419,7 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 		TokenPassthroughTargets: target.Revision.TokenPassthroughTargets,
 		ActorTemplateAtespace:   desiredRef.GetAtespace(), ActorTemplateName: desiredRef.GetName(),
 		ActorTemplateSpecDigest: digest,
+		IdleSuspendDelay:        target.Revision.IdleSuspendDelay,
 	}
 	observed, err := r.templates.GetActorTemplate(ctx, desiredRef.GetAtespace(), desiredRef.GetName())
 	if status.Code(err) == codes.NotFound {

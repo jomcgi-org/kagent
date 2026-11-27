@@ -178,6 +178,9 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 	result.CPU = c.settings.GetCpu()
 	result.Memory = c.settings.GetMemory()
 	result.SandboxClass = (*workerPool).Spec.DefaultSandboxClass()
+	if delay := harness.Spec.IdleSuspendDelay; delay != nil {
+		result.IdleSuspendDelay = delay.Duration
+	}
 	// Shared agents and plugin selections can contribute the same image.
 	// Normalize once after the complete harness configuration has been compiled.
 	slices.Sort(result.SkillImages)

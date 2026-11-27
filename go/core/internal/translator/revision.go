@@ -1,6 +1,8 @@
 package translator
 
 import (
+	"time"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -67,6 +69,8 @@ type Revision struct {
 	WorkerPoolName   string
 	SandboxClass     atev1.SandboxClass
 	SnapshotLocation string
+	// IdleSuspendDelay keeps a settled Session's runtime running before idle suspension.
+	IdleSuspendDelay time.Duration
 
 	// Provenance records non-secret source configuration for diagnostics. Revision
 	// identity comes from compiled runtime inputs, not this source snapshot.
@@ -120,6 +124,8 @@ func (r *Revision) Digest() (RevisionID, error) {
 		TokenPassthroughTargets []egresspolicy.GatewayTarget `json:"tokenPassthroughTargets,omitempty"`
 		EgressDestinations      []string                     `json:"egressDestinations"`
 		SandboxClass            atev1.SandboxClass           `json:"sandboxClass"`
+		// Omitted when zero so revisions without a delay keep their identity.
+		IdleSuspendDelay time.Duration `json:"idleSuspendDelay,omitempty"`
 
 		// Placement now matches the pool's namespace as well as its name.
 		// Hash it explicitly so existing immutable templates do not conflict after upgrades.
@@ -133,6 +139,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation,
 		TokenPassthroughTargets: r.TokenPassthroughTargets, Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
 		SandboxClass: sandboxClass, WorkerPoolNamespace: r.Namespace,
+		IdleSuspendDelay: r.IdleSuspendDelay,
 	})
 	if err != nil {
 		return RevisionID{}, fmt.Errorf("marshal runtime revision inputs: %w", err)

@@ -167,6 +167,15 @@ type HarnessSpec struct {
 
 	// +required
 	Substrate RuntimeSubstratePolicy `json:"substrate"`
+
+	// IdleSuspendDelay keeps a Session's runtime running for this long after
+	// its last turn settles, so follow-up turns skip restore and harness
+	// startup. A new turn restarts the delay, and a checkpoint of the held
+	// turn ends it. Suspension can follow up to one quiescence recovery
+	// interval after the delay. Unset or zero suspends at once.
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s') && duration(self) <= duration('1h')",message="idleSuspendDelay must be between 0s and 1h"
+	// +optional
+	IdleSuspendDelay *metav1.Duration `json:"idleSuspendDelay,omitempty"`
 }
 
 // +genclient

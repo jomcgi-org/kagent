@@ -19,6 +19,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 const (
@@ -40,6 +41,7 @@ type store interface {
 
 type workflow interface {
 	Create(context.Context, *apiv1.Session) (*apiv1.Session, error)
+	Expedite(context.Context, string) error
 }
 
 type tagClient interface {
@@ -110,6 +112,13 @@ func (s *Service) create(ctx context.Context, userID, sessionID, requestID, expe
 		reason := "KAGENT_CHECKPOINT_CONVERSATION_ADVANCED"
 		if errors.Is(err, database.ErrSnapshotPending) {
 			reason = "KAGENT_CHECKPOINT_SNAPSHOT_PENDING"
+			// A runtime held warm by its Harness idleSuspendDelay has no
+			// snapshot yet; suspend it now so the client's retry succeeds.
+			if s.workflow != nil {
+				if expediteErr := s.workflow.Expedite(ctx, sessionID); expediteErr != nil {
+					logging.FromContext(ctx).ErrorContext(ctx, "expedite idle suspension for checkpoint", "session_id", sessionID, "error", expediteErr)
+				}
+			}
 		}
 		failure, detailErr := status.New(codes.FailedPrecondition, err.Error()).WithDetails(&errdetails.ErrorInfo{Domain: "kagent.dev", Reason: reason})
 		if detailErr != nil {
