@@ -93,6 +93,28 @@ func TestRenderConfigRoutesCompressionThroughNamedProvider(t *testing.T) {
 	require.ErrorContains(t, err, "nonnegative")
 }
 
+func TestRenderConfigSpeaksAnthropicMessagesWithItsCacheTTL(t *testing.T) {
+	raw, err := RenderConfig(Settings{
+		Model: "claude-opus-5-5", BaseURL: "https://api.anthropic.com", APIMode: "anthropic_messages", CacheTTL: "1h",
+		CompressionModel: "claude-sonnet-5-5",
+	})
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	require.Equal(t, map[string]any{ProviderName: map[string]any{
+		"name": ProviderName, "base_url": "https://api.anthropic.com",
+		"api_key": CredentialPlaceholder, "api_mode": "anthropic_messages",
+	}}, cfg["providers"])
+	require.Equal(t, map[string]any{"cache_ttl": "1h"}, cfg["prompt_caching"])
+	require.Equal(t, map[string]any{"provider": ProviderName, "model": "claude-sonnet-5-5"}, cfg["auxiliary"].(map[string]any)["compression"])
+
+	raw, err = RenderConfig(Settings{Model: "m", BaseURL: "https://openrouter.ai/api/v1"})
+	require.NoError(t, err)
+	cfg = nil
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	require.NotContains(t, cfg, "prompt_caching")
+}
+
 func TestWriteHomeReplacesConfigAndRemovesEnvFile(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_YOLO_MODE=1\n"), 0o600))

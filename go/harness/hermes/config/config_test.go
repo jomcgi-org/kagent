@@ -42,6 +42,8 @@ func TestParseRejectsInvalidConfig(t *testing.T) {
 		{"log level", func(c *Config) { c.LogLevel = "trace" }, "log_level"},
 		{"compression threshold", func(c *Config) { c.CompressionThresholdTokens = -1 }, "compression_threshold_tokens"},
 		{"compression tail", func(c *Config) { c.CompressionMinTailUserMessages = -1 }, "compression_min_tail_user_messages"},
+		{"api mode", func(c *Config) { c.APIMode = "responses" }, "api_mode"},
+		{"cache ttl", func(c *Config) { c.CacheTTL = "2h" }, "cache_ttl"},
 		{"compression model", func(c *Config) { c.CompressionModel = "a b" }, "compression_model"},
 		{"runtime", func(c *Config) {
 			c.RuntimeTelemetry = tracing.RuntimeTelemetry{Runtime: tracing.RuntimeCodex, AgentName: "a", AgentNamespace: "n"}
