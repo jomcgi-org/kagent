@@ -38,6 +38,14 @@ jobs:
           ./core/internal/substrate/... ./core/pkg/config/...
         go test -v -run 'TestReconciliationWorkerPoolSandboxClass|TestHarnessRuntime' \
           ./core/internal/controller ./core/internal/grpcserver
+    # Hermes Agent v0.23.4, the digest jomcgi-org/homelab pins as hermes_agent.
+    - name: Test that Hermes resolves the config the runner writes
+      working-directory: go
+      env:
+        KAGENT_HERMES_IMAGE: docker.io/nousresearch/hermes-agent@sha256:ef0650d523ee1b5ab32c779acabc446d9936869a9932591553688a62bcf0c42f
+      run: |
+        docker pull --platform linux/amd64 "$KAGENT_HERMES_IMAGE"
+        go test -v -run TestHermesResolvesTheCompiledEndpoint ./harness/hermes/internal/driver
     - name: Test the CRD validation rules against envtest
       working-directory: go
       run: |
