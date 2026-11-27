@@ -144,10 +144,16 @@ func TestCompileRejectsUnsupportedInputs(t *testing.T) {
 		{name: "empty secret", model: openRouter(v1alpha3.ModelConfigSpec{APIKeySecret: "model-auth", APIKeySecretKey: "api-key"}), secret: map[string][]byte{}, wantErr: "non-empty key"},
 		{name: "MCP tools", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
 			input.Root.MCPTools = []translator.ResolvedMCPTool{{}}
-		}, wantErr: "does not support tools"},
+		}, wantErr: "supports only RemoteMCPServer tools"},
+		{name: "sub-agent tools", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
+			input.Root.Template.Spec.Tools = []v1alpha3.ToolBinding{{SubAgent: &v1alpha3.SubAgentToolBinding{Name: "child", Description: "child"}}}
+		}, wantErr: "supports only RemoteMCPServer tools"},
+		{name: "server tools on OpenAI", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
+			input.Harness.Spec.Hermes.ServerTools = &v1alpha3.HermesServerTools{CodeExecution: true}
+		}, wantErr: "Anthropic provider"},
 		{name: "Shared agents", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
 			input.Root.Shared = []translator.AgentInputBinding{{Name: "child"}}
-		}, wantErr: "does not support tools"},
+		}, wantErr: "supports only RemoteMCPServer tools"},
 		{name: "structured output", model: openRouter(v1alpha3.ModelConfigSpec{}), mutate: func(input *translator.HarnessInput) {
 			input.OutputSchema = &translator.ResolvedOutputSchema{}
 		}, wantErr: "structured output"},

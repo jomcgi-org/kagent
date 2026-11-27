@@ -28,9 +28,10 @@ import (
 
 // Compiler translates resolved inputs into a Hermes runtime revision.
 //
-// The first Hermes adapter runs Hermes with every toolset off, so the
-// compiler accepts one OpenAI-compatible model and rejects tools, skills,
-// plugins and Shared agents rather than dropping them silently.
+// Hermes runs with every built-in toolset off. The compiler accepts one
+// model, RemoteMCPServer tools with explicit tool lists, and Anthropic server
+// tools, and rejects sub-agents, skills, plugins and Shared agents rather
+// than dropping them silently.
 type Compiler struct {
 	settings    *configv1.RuntimeDefaultsConfig
 	ctx         krt.HandlerContext
@@ -51,8 +52,8 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	if input.OutputSchema != nil {
 		return nil, translator.NewValidationError("Hermes does not support structured output")
 	}
-	if len(input.Root.MCPTools) != 0 || len(input.Root.Shared) != 0 || len(template.Spec.Tools) != 0 || len(template.Spec.Skills) != 0 || len(template.Spec.Plugins) != 0 {
-		return nil, translator.NewValidationError("Hermes does not support tools, skills, plugins, or Shared agents")
+	if len(input.Root.Shared) != 0 || len(template.Spec.Tools) != len(input.Root.MCPTools) || len(template.Spec.Skills) != 0 || len(template.Spec.Plugins) != 0 {
+		return nil, translator.NewValidationError("Hermes supports only RemoteMCPServer tools: no sub-agents, skills, plugins, or Shared agents")
 	}
 	model := input.Root.ResolvedModelConfig.Config
 	if strings.TrimSpace(model.Spec.Model) == "" {
@@ -86,6 +87,15 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		return nil, err
 	}
 
+	mcp, err := c.compileMCP(template.Namespace, input.Root.MCPTools)
+	if err != nil {
+		return nil, err
+	}
+	serverTools, err := compileServerTools(harness.Spec.Hermes.ServerTools, model.Spec.Provider)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := hermesconfig.Production(strings.TrimSpace(model.Spec.Model), baseURL, input.Root.Instruction)
 	cfg.APIMode, cfg.CacheTTL = apiMode, cacheTTL
 	if compression := harness.Spec.Hermes.Compression; compression != nil {
@@ -93,6 +103,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		cfg.CompressionMinTailUserMessages = int(ptr.Deref(compression.MinTailUserMessages, 0))
 		cfg.CompressionModel = strings.TrimSpace(compression.Model)
 	}
+	cfg.MCPServers, cfg.ServerTools = mcp.servers, serverTools
 	cfg.RuntimeTelemetry = telemetryConfig.RuntimeTelemetry(tracing.RuntimeHermes, input.AgentName, template.Namespace, model.Spec)
 	cfg.ControlPlaneURL = c.settings.GetControlPlaneUrl()
 	cfg.MaxContentLength = c.settings.MaxContentLength // Preserve unset versus unlimited.
@@ -121,6 +132,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		return nil, err
 	}
 	destinations := []string{destination, c.settings.GetControlPlaneUrl()}
+	destinations = append(destinations, mcp.egress...)
 	destinations = append(destinations, telemetryConfig.Destinations(environment)...)
 	slices.Sort(destinations)
 	return &translator.CompileResult{Revision: translator.Revision{
@@ -256,6 +268,10 @@ func (c *Compiler) buildProvenance(input *translator.HarnessInput) ([]byte, erro
 	}
 	model := input.Root.ResolvedModelConfig.Config
 	entries = append(entries, objectProvenance("ModelConfig", model.Namespace+"/"+model.Name, model.UID, model.Generation, model.Spec))
+	for _, tool := range input.Root.MCPTools {
+		server := tool.Server
+		entries = append(entries, objectProvenance("RemoteMCPServer", server.Namespace+"/"+server.Name, server.UID, server.Generation, server.Spec))
+	}
 	configMaps := map[types.NamespacedName]struct{}{}
 	spec := input.Root.Template.Spec
 	if spec.SystemPromptFrom != nil {

@@ -1,0 +1,4 @@
+name: kagent-server-tools
+version: 1.0.0
+description: "Adds the kagent-compiled Anthropic server tools to each Messages API turn request."
+author: "kagent"

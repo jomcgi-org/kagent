@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -80,6 +81,12 @@ type Config struct {
 	// CompressionModel is the summary model, called through the same endpoint
 	// as Model. Empty means Model.
 	CompressionModel string `json:"compression_model,omitempty"`
+	// MCPServers are the Streamable HTTP MCP servers Hermes connects to, by
+	// Hermes server name. Each lists the only tools Hermes registers.
+	MCPServers map[string]MCPServer `json:"mcp_servers,omitempty"`
+	// ServerTools are the Anthropic server tools added to each Messages API
+	// request of a turn. Nil adds none.
+	ServerTools *ServerTools `json:"server_tools,omitempty"`
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy. It is absent for standalone runs.
 	RuntimeTelemetry     tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
@@ -89,6 +96,27 @@ type Config struct {
 	StopGraceMillis      int                      `json:"stop_grace_millis"`
 	MaxResponseBytes     int                      `json:"max_response_bytes"`
 }
+
+// MCPServer is one remote MCP server. Header values are literals or the
+// credential placeholder that the egress gateway replaces.
+type MCPServer struct {
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
+	// Tools is the explicit allowlist, rendered as tools.include.
+	Tools []string `json:"tools"`
+}
+
+// ServerTools selects Anthropic server tools. A zero MaxUses leaves a web
+// tool out.
+type ServerTools struct {
+	WebSearchMaxUses int  `json:"web_search_max_uses,omitempty"`
+	WebFetchMaxUses  int  `json:"web_fetch_max_uses,omitempty"`
+	CodeExecution    bool `json:"code_execution,omitempty"`
+}
+
+// mcpServerName matches the names Hermes prefixes onto tool names. Kagent's
+// runtime names use only these characters.
+var mcpServerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
 
 // Production returns the configuration the compiler emits for model.
 func Production(model, baseURL, instructions string) Config {
@@ -158,6 +186,9 @@ func (c Config) Validate() error {
 	if c.CompressionModel != strings.TrimSpace(c.CompressionModel) || strings.ContainsAny(c.CompressionModel, " \t\r\n") {
 		return fmt.Errorf("compression_model must not contain whitespace")
 	}
+	if err := c.validateTools(); err != nil {
+		return err
+	}
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return fmt.Errorf("base_url must be an absolute HTTP(S) URL without credentials or fragment")
@@ -184,6 +215,45 @@ func (c Config) APIKeyEnv() string {
 		return AnthropicAPIKeyEnvName
 	}
 	return APIKeyEnvName
+}
+
+func (c Config) validateTools() error {
+	for name, server := range c.MCPServers {
+		if !mcpServerName.MatchString(name) {
+			return fmt.Errorf("mcp_servers name %q must match %s", name, mcpServerName)
+		}
+		u, err := url.Parse(server.URL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
+			return fmt.Errorf("mcp_servers %q url must be an absolute HTTP(S) URL without credentials or fragment", name)
+		}
+		if len(server.Tools) == 0 {
+			return fmt.Errorf("mcp_servers %q must list its tools", name)
+		}
+		for _, tool := range server.Tools {
+			if strings.TrimSpace(tool) == "" || strings.ContainsAny(tool, "*?[") {
+				return fmt.Errorf("mcp_servers %q tool %q must be an exact name", name, tool)
+			}
+		}
+		for header := range server.Headers {
+			if strings.TrimSpace(header) == "" || strings.Contains(header, "${") {
+				return fmt.Errorf("mcp_servers %q has an invalid header name", name)
+			}
+		}
+		for _, value := range server.Headers {
+			if strings.Contains(value, "${") {
+				return fmt.Errorf("mcp_servers %q header values must not reference variables", name)
+			}
+		}
+	}
+	if t := c.ServerTools; t != nil {
+		if t.WebSearchMaxUses < 0 || t.WebSearchMaxUses > 20 || t.WebFetchMaxUses < 0 || t.WebFetchMaxUses > 20 {
+			return fmt.Errorf("server_tools max uses must be between 0 and 20")
+		}
+		if t.WebSearchMaxUses == 0 && t.WebFetchMaxUses == 0 && !t.CodeExecution {
+			return fmt.Errorf("server_tools must select a tool")
+		}
+	}
+	return nil
 }
 
 func (c Config) StartupTimeout() time.Duration {

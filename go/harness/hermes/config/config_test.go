@@ -45,6 +45,21 @@ func TestParseRejectsInvalidConfig(t *testing.T) {
 		{"api mode", func(c *Config) { c.APIMode = "responses" }, "api_mode"},
 		{"cache ttl", func(c *Config) { c.CacheTTL = "2h" }, "cache_ttl"},
 		{"compression model", func(c *Config) { c.CompressionModel = "a b" }, "compression_model"},
+		{"MCP name", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{"a b": {URL: "https://m.example.com/mcp", Tools: []string{"t"}}}
+		}, "mcp_servers name"},
+		{"MCP URL", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{"m": {URL: "m.example.com", Tools: []string{"t"}}}
+		}, "url must be"},
+		{"MCP tools", func(c *Config) { c.MCPServers = map[string]MCPServer{"m": {URL: "https://m.example.com/mcp"}} }, "must list its tools"},
+		{"MCP glob", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{"m": {URL: "https://m.example.com/mcp", Tools: []string{"*"}}}
+		}, "exact name"},
+		{"MCP header variable", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{"m": {URL: "https://m.example.com/mcp", Tools: []string{"t"}, Headers: map[string]string{"X": "${HOME}"}}}
+		}, "must not reference variables"},
+		{"server tools empty", func(c *Config) { c.ServerTools = &ServerTools{} }, "select a tool"},
+		{"server tools uses", func(c *Config) { c.ServerTools = &ServerTools{WebSearchMaxUses: 21} }, "between 0 and 20"},
 		{"runtime", func(c *Config) {
 			c.RuntimeTelemetry = tracing.RuntimeTelemetry{Runtime: tracing.RuntimeCodex, AgentName: "a", AgentNamespace: "n"}
 		}, "names runtime"},

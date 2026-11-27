@@ -50,13 +50,34 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
 - Token usage per turn. Hermes reports one total for a turn that can span
   several model requests, so the adapter counts tokens and opens no model span.
 
-The compiler rejects tools, skills, plugins, Shared agents, structured output,
-`defaultHeaders`, TLS settings, `tokenPassthrough`, and OpenAI options other
+- RemoteMCPServer tools over Streamable HTTP. Each binding must list its
+  tools; the adapter renders them as `tools.include` and names only the bound
+  servers in `platform_toolsets.api_server`, so no built-in toolset loads.
+  Sampling, elicitation, and the resource and prompt utility tools are off,
+  and Tool Search is off, so each MCP tool is in the request itself. A Secret
+  header or `actorJwt` holds the credential placeholder, and the egress
+  gateway injects the value. An MCP server name must not be a Hermes toolset
+  name, such as `memory`.
+- Anthropic server tools from `spec.hermes.serverTools` (`webSearch`,
+  `webFetch` with `maxUses`, and `codeExecution`). They need a ModelConfig
+  with the Anthropic provider. Hermes 0.23.4 builds the Anthropic `tools`
+  list from function tools only, so the adapter writes the plugin
+  `kagent-server-tools` into `$HERMES_HOME/plugins` and enables only it. Its
+  `llm_request` middleware adds the tool entries to each turn request.
+  Hermes keeps the answer text and drops the server tool blocks when it
+  replays history. That edit can invalidate a later thinking block, so the
+  plugin also sets `thinking.block_binding.prefix_mismatch_behavior:
+  drop_block` (beta `thinking-binding-controls-2026-08-01`). A
+  `pause_turn` stop ends the turn with the text so far.
+
+The compiler rejects sub-agent tools, skills, plugins, Shared agents,
+structured output, `defaultHeaders`, TLS settings, `tokenPassthrough`,
+`requireApproval` (Hermes denies every approval), and OpenAI options other
 than `baseUrl` and `apiFormat: chatCompletions`.
 
 ## Isolation
 
-- `config.yaml` turns off every toolset, memory, and lazy installs, and denies
+- `config.yaml` turns off every built-in toolset, memory, and lazy installs, and denies
   every approval (`unattended_mode: deny`), so a turn never waits on a person.
   The adapter writes it before every gateway start; the compiled configuration
   owns it.

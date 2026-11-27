@@ -1,12 +1,14 @@
 package driver
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -48,7 +50,35 @@ type Settings struct {
 	CompressionMinTailUserMessages int
 	// CompressionModel is the summary model. Empty means Model.
 	CompressionModel string
+	// MCPServers are the remote MCP servers, by Hermes server name. Hermes
+	// registers only each server's listed tools.
+	MCPServers map[string]MCPServer
+	// ServerTools are the Anthropic server tools. Nil adds none.
+	ServerTools *ServerTools
 }
+
+// MCPServer is one Streamable HTTP MCP server.
+type MCPServer struct {
+	URL string
+	// Headers hold literals or the credential placeholder.
+	Headers map[string]string
+	Tools   []string
+}
+
+// ServerTools selects Anthropic server tools. A zero MaxUses leaves a web
+// tool out.
+type ServerTools struct {
+	WebSearchMaxUses int
+	WebFetchMaxUses  int
+	CodeExecution    bool
+}
+
+// ServerToolsPlugin names the Hermes plugin that adds the server tools to
+// each Messages API request (plugin/__init__.py).
+const ServerToolsPlugin = "kagent-server-tools"
+
+//go:embed plugin/__init__.py plugin/plugin.yaml
+var serverToolsPlugin embed.FS
 
 // ProviderName names the providers: entry that holds the compiled endpoint.
 const ProviderName = "kagent"
@@ -127,18 +157,61 @@ type promptCachingConfig struct {
 	CacheTTL string `yaml:"cache_ttl"`
 }
 
+// mcpServerConfig is one mcp_servers entry. Sampling and elicitation are
+// off: a server must not start model calls or ask a person for input.
+type mcpServerConfig struct {
+	URL         string            `yaml:"url"`
+	Headers     map[string]string `yaml:"headers,omitempty"`
+	Enabled     bool              `yaml:"enabled"`
+	Trust       string            `yaml:"trust"`
+	Tools       mcpToolsConfig    `yaml:"tools"`
+	Sampling    switchConfig      `yaml:"sampling"`
+	Elicitation switchConfig      `yaml:"elicitation"`
+}
+
+// mcpToolsConfig registers only Include, and none of Hermes' resource and
+// prompt utility tools.
+type mcpToolsConfig struct {
+	Include   []string `yaml:"include"`
+	Resources bool     `yaml:"resources"`
+	Prompts   bool     `yaml:"prompts"`
+}
+
+type switchConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// toolsConfig turns off Tool Search, so each MCP tool is in the request
+// itself rather than behind tool_search and tool_call, and Nous's remote
+// connectors.
+type toolsConfig struct {
+	ToolSearch toolSearchConfig `yaml:"tool_search"`
+	Connectors switchConfig     `yaml:"connectors"`
+}
+
+type toolSearchConfig struct {
+	Enabled string `yaml:"enabled"`
+}
+
+type pluginsConfig struct {
+	Enabled []string `yaml:"enabled"`
+}
+
 type hermesConfig struct {
-	Model            modelConfig               `yaml:"model"`
-	Providers        map[string]providerConfig `yaml:"providers"`
-	Toolsets         []string                  `yaml:"toolsets"`
-	PlatformToolsets map[string][]string       `yaml:"platform_toolsets"`
-	Agent            agentConfig               `yaml:"agent"`
-	Memory           memoryConfig              `yaml:"memory"`
-	Approvals        approvalsConfig           `yaml:"approvals"`
-	Security         securityConfig            `yaml:"security"`
-	Auxiliary        auxiliaryConfig           `yaml:"auxiliary"`
-	Compression      *compressionConfig        `yaml:"compression,omitempty"`
-	PromptCaching    *promptCachingConfig      `yaml:"prompt_caching,omitempty"`
+	Model            modelConfig                `yaml:"model"`
+	Providers        map[string]providerConfig  `yaml:"providers"`
+	Toolsets         []string                   `yaml:"toolsets"`
+	PlatformToolsets map[string][]string        `yaml:"platform_toolsets"`
+	Agent            agentConfig                `yaml:"agent"`
+	Memory           memoryConfig               `yaml:"memory"`
+	Approvals        approvalsConfig            `yaml:"approvals"`
+	Security         securityConfig             `yaml:"security"`
+	Auxiliary        auxiliaryConfig            `yaml:"auxiliary"`
+	Compression      *compressionConfig         `yaml:"compression,omitempty"`
+	PromptCaching    *promptCachingConfig       `yaml:"prompt_caching,omitempty"`
+	MCPServers       map[string]mcpServerConfig `yaml:"mcp_servers,omitempty"`
+	Plugins          pluginsConfig              `yaml:"plugins"`
+	Tools            toolsConfig                `yaml:"tools"`
 }
 
 // hindsightConfig is $HERMES_HOME/hindsight/config.json. It stays inert
@@ -174,15 +247,27 @@ func RenderConfig(s Settings) ([]byte, error) {
 	if s.CompressionThresholdTokens > 0 || s.CompressionMinTailUserMessages > 0 {
 		compression = &compressionConfig{ThresholdTokens: s.CompressionThresholdTokens, MinTailUserMessages: s.CompressionMinTailUserMessages}
 	}
+	mcpServers, serverNames, err := renderMCPServers(s.MCPServers)
+	if err != nil {
+		return nil, err
+	}
+	plugins := pluginsConfig{Enabled: []string{}}
+	if s.ServerTools != nil {
+		if _, err := serverToolsJSON(*s.ServerTools); err != nil {
+			return nil, err
+		}
+		plugins.Enabled = []string{ServerToolsPlugin}
+	}
 	return yaml.Marshal(hermesConfig{
 		Model: modelConfig{Default: s.Model, Provider: ProviderName},
 		Providers: map[string]providerConfig{ProviderName: {
 			Name: ProviderName, BaseURL: s.BaseURL, APIKey: s.APIKey, APIMode: apiMode,
 		}},
-		// An explicit empty list enables no toolset and merges no MCP server
+		// An explicit list that names only MCP servers enables no built-in
+		// toolset and only those servers; an empty one enables nothing
 		// (hermes_cli/tools_config.py _get_platform_tools at v0.23.4).
 		Toolsets:         []string{},
-		PlatformToolsets: map[string][]string{"api_server": {}},
+		PlatformToolsets: map[string][]string{"api_server": serverNames},
 		Agent:            agentConfig{DisabledToolsets: DisabledToolsets},
 		Memory:           memoryConfig{},
 		// api_server sessions are unattended: unattended_mode deny refuses a
@@ -193,7 +278,63 @@ func RenderConfig(s Settings) ([]byte, error) {
 		Auxiliary:     auxiliary,
 		Compression:   compression,
 		PromptCaching: caching,
+		MCPServers:    mcpServers,
+		Plugins:       plugins,
+		Tools:         toolsConfig{ToolSearch: toolSearchConfig{Enabled: "off"}},
 	})
+}
+
+func renderMCPServers(servers map[string]MCPServer) (map[string]mcpServerConfig, []string, error) {
+	names := make([]string, 0, len(servers))
+	if len(servers) == 0 {
+		return nil, names, nil
+	}
+	rendered := make(map[string]mcpServerConfig, len(servers))
+	for name, server := range servers {
+		// platform_toolsets resolves a built-in or composite toolset name
+		// before an MCP server of the same name.
+		if slices.Contains(DisabledToolsets, name) || strings.HasPrefix(name, "hermes") || name == "no_mcp" {
+			return nil, nil, fmt.Errorf("hermes MCP server name %q is a built-in toolset", name)
+		}
+		if strings.TrimSpace(server.URL) == "" || len(server.Tools) == 0 {
+			return nil, nil, fmt.Errorf("hermes MCP server %q needs a URL and its tools", name)
+		}
+		tools := slices.Clone(server.Tools)
+		slices.Sort(tools)
+		rendered[name] = mcpServerConfig{
+			URL: server.URL, Headers: server.Headers, Enabled: true, Trust: "full",
+			Tools: mcpToolsConfig{Include: slices.Compact(tools)},
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return rendered, names, nil
+}
+
+type serverToolsFile struct {
+	Tools []map[string]any `json:"tools"`
+}
+
+// serverToolsJSON returns the plugin's server_tools.json: the Anthropic tool
+// entries in a fixed order, so each request sends identical tools.
+func serverToolsJSON(t ServerTools) ([]byte, error) {
+	if t.WebSearchMaxUses < 0 || t.WebSearchMaxUses > 20 || t.WebFetchMaxUses < 0 || t.WebFetchMaxUses > 20 {
+		return nil, fmt.Errorf("hermes server tool max uses must be between 0 and 20")
+	}
+	var tools []map[string]any
+	if t.WebSearchMaxUses > 0 {
+		tools = append(tools, map[string]any{"type": "web_search_20260209", "name": "web_search", "max_uses": t.WebSearchMaxUses})
+	}
+	if t.WebFetchMaxUses > 0 {
+		tools = append(tools, map[string]any{"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": t.WebFetchMaxUses})
+	}
+	if t.CodeExecution {
+		tools = append(tools, map[string]any{"type": "code_execution_20260521", "name": "code_execution"})
+	}
+	if len(tools) == 0 {
+		return nil, fmt.Errorf("hermes server tools select no tool")
+	}
+	return json.MarshalIndent(serverToolsFile{Tools: tools}, "", "  ")
 }
 
 // WriteHome writes the rendered configuration into home. It replaces files
@@ -220,6 +361,39 @@ func WriteHome(home string, s Settings) error {
 	}
 	if err := utils.ReplacePrivateFile(filepath.Join(home, "hindsight", "config.json"), hindsight); err != nil {
 		return fmt.Errorf("write Hermes hindsight config: %w", err)
+	}
+	return writeServerToolsPlugin(home, s.ServerTools)
+}
+
+// writeServerToolsPlugin replaces the plugin directory, or removes it when no
+// server tool is selected, so a plugin from an earlier start never loads.
+func writeServerToolsPlugin(home string, tools *ServerTools) error {
+	dir := filepath.Join(home, "plugins", ServerToolsPlugin)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove Hermes server tools plugin: %w", err)
+	}
+	if tools == nil {
+		return nil
+	}
+	config, err := serverToolsJSON(*tools)
+	if err != nil {
+		return err
+	}
+	if err := utils.EnsurePrivateDir(dir); err != nil {
+		return fmt.Errorf("prepare Hermes server tools plugin: %w", err)
+	}
+	files := map[string][]byte{"server_tools.json": config}
+	for _, name := range []string{"__init__.py", "plugin.yaml"} {
+		content, err := serverToolsPlugin.ReadFile("plugin/" + name)
+		if err != nil {
+			return err
+		}
+		files[name] = content
+	}
+	for name, content := range files {
+		if err := utils.ReplacePrivateFile(filepath.Join(dir, name), content); err != nil {
+			return fmt.Errorf("write Hermes server tools plugin: %w", err)
+		}
 	}
 	return nil
 }

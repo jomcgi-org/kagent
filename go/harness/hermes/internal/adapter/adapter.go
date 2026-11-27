@@ -41,11 +41,30 @@ func New(_ context.Context, input Input) (*driver.Driver, error) {
 			APIMode: cfg.APIMode, CacheTTL: cfg.CacheTTL,
 			CompressionThresholdTokens: cfg.CompressionThresholdTokens, CompressionMinTailUserMessages: cfg.CompressionMinTailUserMessages,
 			CompressionModel: cfg.CompressionModel,
+			MCPServers:       mcpServers(cfg.MCPServers), ServerTools: serverTools(cfg.ServerTools),
 		},
 		Instructions: cfg.Instructions, Model: cfg.Model, Provider: cfg.RuntimeTelemetry.Provider,
 		Environment: input.Environment, StartupTimeout: cfg.StartupTimeout(), TurnTimeout: cfg.TurnTimeout(),
 		StopGrace: cfg.StopGrace(), MaxBytes: cfg.MaxResponseBytes, Output: input.Output,
 	})
+}
+
+func mcpServers(servers map[string]config.MCPServer) map[string]driver.MCPServer {
+	if len(servers) == 0 {
+		return nil
+	}
+	result := make(map[string]driver.MCPServer, len(servers))
+	for name, server := range servers {
+		result[name] = driver.MCPServer{URL: server.URL, Headers: server.Headers, Tools: server.Tools}
+	}
+	return result
+}
+
+func serverTools(tools *config.ServerTools) *driver.ServerTools {
+	if tools == nil {
+		return nil
+	}
+	return &driver.ServerTools{WebSearchMaxUses: tools.WebSearchMaxUses, WebFetchMaxUses: tools.WebFetchMaxUses, CodeExecution: tools.CodeExecution}
 }
 
 func lookup(environment []string, name string) string {

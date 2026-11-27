@@ -114,6 +114,40 @@ type HermesHarness struct {
 	// defaults: compress at half the model window, summarised by the main model.
 	// +optional
 	Compression *HermesCompression `json:"compression,omitempty"`
+
+	// ServerTools adds Anthropic server tools to each Messages API request of
+	// a turn. Anthropic runs them; the Actor makes no request to the tool's
+	// target. It requires a ModelConfig with the Anthropic provider.
+	// +optional
+	ServerTools *HermesServerTools `json:"serverTools,omitempty"`
+}
+
+// HermesServerTools selects Anthropic server tools. Each unset field leaves
+// its tool out.
+type HermesServerTools struct {
+	// WebSearch adds web_search (type web_search_20260209).
+	// +optional
+	WebSearch *HermesServerToolLimit `json:"webSearch,omitempty"`
+
+	// WebFetch adds web_fetch (type web_fetch_20260209). It fetches only URLs
+	// that are already in the conversation.
+	// +optional
+	WebFetch *HermesServerToolLimit `json:"webFetch,omitempty"`
+
+	// CodeExecution adds code_execution (type code_execution_20260521). Code
+	// runs in Anthropic's sandbox, which has no network access.
+	// +optional
+	CodeExecution bool `json:"codeExecution,omitempty"`
+}
+
+// HermesServerToolLimit bounds one server tool.
+type HermesServerToolLimit struct {
+	// MaxUses is the tool's max_uses: the most calls in one Messages API
+	// request. A turn that calls MCP tools makes one request per model step.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	// +required
+	MaxUses int32 `json:"maxUses"`
 }
 
 // HermesCompression sets when Hermes compresses a session and which model

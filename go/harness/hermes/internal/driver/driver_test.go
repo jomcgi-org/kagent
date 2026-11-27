@@ -115,6 +115,63 @@ func TestRenderConfigSpeaksAnthropicMessagesWithItsCacheTTL(t *testing.T) {
 	require.NotContains(t, cfg, "prompt_caching")
 }
 
+func TestRenderConfigEnablesOnlyListedMCPTools(t *testing.T) {
+	raw, err := RenderConfig(Settings{Model: "m", BaseURL: "https://api.anthropic.com", MCPServers: map[string]MCPServer{
+		"scotland": {URL: "https://scotland.example.com/mcp", Tools: []string{"plan", "check", "plan"}},
+		"recall":   {URL: "http://hindsight.test.svc:8888/mcp/", Headers: map[string]string{"Authorization": CredentialPlaceholder}, Tools: []string{"recall"}},
+	}})
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	require.Equal(t, []any{}, cfg["toolsets"])
+	require.Equal(t, map[string]any{"api_server": []any{"recall", "scotland"}}, cfg["platform_toolsets"])
+	require.Len(t, cfg["agent"].(map[string]any)["disabled_toolsets"], len(DisabledToolsets))
+	servers := cfg["mcp_servers"].(map[string]any)
+	require.Equal(t, map[string]any{
+		"url": "https://scotland.example.com/mcp", "enabled": true, "trust": "full",
+		"tools":    map[string]any{"include": []any{"check", "plan"}, "resources": false, "prompts": false},
+		"sampling": map[string]any{"enabled": false}, "elicitation": map[string]any{"enabled": false},
+	}, servers["scotland"])
+	require.Equal(t, map[string]any{"Authorization": CredentialPlaceholder}, servers["recall"].(map[string]any)["headers"])
+	require.Equal(t, map[string]any{"enabled": []any{}}, cfg["plugins"])
+	require.Equal(t, map[string]any{"tool_search": map[string]any{"enabled": "off"}, "connectors": map[string]any{"enabled": false}}, cfg["tools"])
+
+	_, err = RenderConfig(Settings{Model: "m", BaseURL: "https://api.anthropic.com", MCPServers: map[string]MCPServer{"memory": {URL: "https://x.example.com", Tools: []string{"t"}}}})
+	require.ErrorContains(t, err, "built-in toolset")
+	_, err = RenderConfig(Settings{Model: "m", BaseURL: "https://api.anthropic.com", MCPServers: map[string]MCPServer{"m": {URL: "https://x.example.com"}}})
+	require.ErrorContains(t, err, "needs a URL and its tools")
+}
+
+func TestWriteHomeWritesAndRemovesServerToolsPlugin(t *testing.T) {
+	home := t.TempDir()
+	settings := Settings{Model: "m", BaseURL: "https://api.anthropic.com", ServerTools: &ServerTools{WebSearchMaxUses: 5, WebFetchMaxUses: 3, CodeExecution: true}}
+	require.NoError(t, WriteHome(home, settings))
+	raw, err := os.ReadFile(filepath.Join(home, "config.yaml"))
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	require.Equal(t, map[string]any{"enabled": []any{ServerToolsPlugin}}, cfg["plugins"])
+	dir := filepath.Join(home, "plugins", ServerToolsPlugin)
+	tools, err := os.ReadFile(filepath.Join(dir, "server_tools.json"))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"tools":[
+		{"type":"web_search_20260209","name":"web_search","max_uses":5},
+		{"type":"web_fetch_20260209","name":"web_fetch","max_uses":3},
+		{"type":"code_execution_20260521","name":"code_execution"}]}`, string(tools))
+	for _, name := range []string{"__init__.py", "plugin.yaml"} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		require.NoError(t, err, name)
+	}
+
+	settings.ServerTools = nil
+	require.NoError(t, WriteHome(home, settings))
+	_, err = os.Stat(dir)
+	require.True(t, os.IsNotExist(err), "the plugin must be removed when no server tool is selected")
+
+	_, err = RenderConfig(Settings{Model: "m", BaseURL: "https://api.anthropic.com", ServerTools: &ServerTools{}})
+	require.ErrorContains(t, err, "select no tool")
+}
+
 func TestWriteHomeReplacesConfigAndRemovesEnvFile(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_YOLO_MODE=1\n"), 0o600))
