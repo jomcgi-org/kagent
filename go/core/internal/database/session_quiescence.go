@@ -39,7 +39,7 @@ func (c *Client) ExpediteSessionQuiescence(ctx context.Context, sessionID string
 	tag, err := c.db.Exec(ctx, `
 		UPDATE session_task_event e SET quiescence_expedited = TRUE
 		FROM session_record i
-		WHERE i.id::text = $1 AND e.history_id = i.history_id
+		WHERE i.id = $1::uuid AND e.history_id = i.history_id
 		  AND e.quiescence_pending AND e.quiescence_executor_id IS NULL
 		  AND NOT e.quiescence_expedited
 	`, sessionID)
