@@ -36,6 +36,14 @@ type Settings struct {
 	BaseURL string
 	// APIKey is the key Hermes sends. Empty means CredentialPlaceholder.
 	APIKey string
+	// CompressionThresholdTokens is compression.threshold_tokens. Zero keeps
+	// Hermes's ratio-only trigger.
+	CompressionThresholdTokens int
+	// CompressionMinTailUserMessages is compression.min_tail_user_messages.
+	// Zero keeps Hermes's default.
+	CompressionMinTailUserMessages int
+	// CompressionModel is the summary model. Empty means Model.
+	CompressionModel string
 }
 
 // ProviderName names the providers: entry that holds the compiled endpoint.
@@ -84,8 +92,26 @@ type titleConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// auxiliaryTaskConfig routes one auxiliary task. Hermes 0.23.4 resolves a
+// provider that names a providers: entry to that entry's base_url and
+// api_key (agent/auxiliary_client.py _resolve_named_custom_branch), so the
+// summary goes to the same endpoint and egress credential as the main model.
+type auxiliaryTaskConfig struct {
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+}
+
 type auxiliaryConfig struct {
-	TitleGeneration titleConfig `yaml:"title_generation"`
+	TitleGeneration titleConfig          `yaml:"title_generation"`
+	Compression     *auxiliaryTaskConfig `yaml:"compression,omitempty"`
+}
+
+// compressionConfig is the compression: block. Hermes compresses at the
+// lower of its ratio threshold and threshold_tokens, and keeps the newest
+// min_tail_user_messages user messages verbatim.
+type compressionConfig struct {
+	ThresholdTokens     int `yaml:"threshold_tokens,omitempty"`
+	MinTailUserMessages int `yaml:"min_tail_user_messages,omitempty"`
 }
 
 type hermesConfig struct {
@@ -98,6 +124,7 @@ type hermesConfig struct {
 	Approvals        approvalsConfig           `yaml:"approvals"`
 	Security         securityConfig            `yaml:"security"`
 	Auxiliary        auxiliaryConfig           `yaml:"auxiliary"`
+	Compression      *compressionConfig        `yaml:"compression,omitempty"`
 }
 
 // hindsightConfig is $HERMES_HOME/hindsight/config.json. It stays inert
@@ -114,6 +141,17 @@ func RenderConfig(s Settings) ([]byte, error) {
 	if s.APIKey == "" {
 		s.APIKey = CredentialPlaceholder
 	}
+	if s.CompressionThresholdTokens < 0 || s.CompressionMinTailUserMessages < 0 {
+		return nil, fmt.Errorf("hermes compression settings must be nonnegative")
+	}
+	auxiliary := auxiliaryConfig{TitleGeneration: titleConfig{Enabled: false}}
+	if model := strings.TrimSpace(s.CompressionModel); model != "" {
+		auxiliary.Compression = &auxiliaryTaskConfig{Provider: ProviderName, Model: model}
+	}
+	var compression *compressionConfig
+	if s.CompressionThresholdTokens > 0 || s.CompressionMinTailUserMessages > 0 {
+		compression = &compressionConfig{ThresholdTokens: s.CompressionThresholdTokens, MinTailUserMessages: s.CompressionMinTailUserMessages}
+	}
 	return yaml.Marshal(hermesConfig{
 		Model: modelConfig{Default: s.Model, Provider: ProviderName},
 		Providers: map[string]providerConfig{ProviderName: {
@@ -128,9 +166,10 @@ func RenderConfig(s Settings) ([]byte, error) {
 		// api_server sessions are unattended: unattended_mode deny refuses a
 		// flagged action at once instead of parking the turn, so a turn never
 		// waits on a person.
-		Approvals: approvalsConfig{Mode: "manual", Timeout: 10, CronMode: "deny", SingleQueryMode: "deny", UnattendedMode: "deny"},
-		Security:  securityConfig{AllowLazyInstalls: false},
-		Auxiliary: auxiliaryConfig{TitleGeneration: titleConfig{Enabled: false}},
+		Approvals:   approvalsConfig{Mode: "manual", Timeout: 10, CronMode: "deny", SingleQueryMode: "deny", UnattendedMode: "deny"},
+		Security:    securityConfig{AllowLazyInstalls: false},
+		Auxiliary:   auxiliary,
+		Compression: compression,
 	})
 }
 

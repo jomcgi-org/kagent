@@ -57,6 +57,42 @@ func TestRenderConfigDisablesToolsMemoryAndApprovals(t *testing.T) {
 	require.ErrorContains(t, err, "model and base URL are required")
 }
 
+func TestRenderConfigOmitsCompressionByDefault(t *testing.T) {
+	raw, err := RenderConfig(Settings{Model: "m", BaseURL: "https://openrouter.ai/api/v1"})
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	require.NotContains(t, cfg, "compression")
+	require.Equal(t, map[string]any{"title_generation": map[string]any{"enabled": false}}, cfg["auxiliary"])
+}
+
+func TestRenderConfigRoutesCompressionThroughNamedProvider(t *testing.T) {
+	raw, err := RenderConfig(Settings{
+		Model: "google/gemini-4-neon", BaseURL: "https://openrouter.ai/api/v1",
+		CompressionThresholdTokens: 128000, CompressionMinTailUserMessages: 3, CompressionModel: "deepseek/deepseek-v4.1-flash-1017",
+	})
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	require.Equal(t, map[string]any{"threshold_tokens": 128000, "min_tail_user_messages": 3}, cfg["compression"])
+	require.Equal(t, map[string]any{
+		"title_generation": map[string]any{"enabled": false},
+		"compression":      map[string]any{"provider": ProviderName, "model": "deepseek/deepseek-v4.1-flash-1017"},
+	}, cfg["auxiliary"])
+	// One providers entry: the summary uses the main model's endpoint and key.
+	require.Len(t, cfg["providers"], 1)
+
+	raw, err = RenderConfig(Settings{Model: "m", BaseURL: "https://openrouter.ai/api/v1", CompressionThresholdTokens: 128000})
+	require.NoError(t, err)
+	cfg = nil
+	require.NoError(t, yaml.Unmarshal(raw, &cfg))
+	require.Equal(t, map[string]any{"threshold_tokens": 128000}, cfg["compression"])
+	require.NotContains(t, cfg["auxiliary"], "compression")
+
+	_, err = RenderConfig(Settings{Model: "m", BaseURL: "https://openrouter.ai/api/v1", CompressionThresholdTokens: -1})
+	require.ErrorContains(t, err, "nonnegative")
+}
+
 func TestWriteHomeReplacesConfigAndRemovesEnvFile(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_YOLO_MODE=1\n"), 0o600))

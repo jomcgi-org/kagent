@@ -109,7 +109,38 @@ type ClaudeHarness struct{}
 // HermesHarness selects the Hermes Agent runtime adapter. Kagent publishes no
 // built-in Hermes image, so workload.image must name one that contains Hermes
 // Agent and the kagent-hermes adapter.
-type HermesHarness struct{}
+type HermesHarness struct {
+	// Compression tunes Hermes context compression. Unset keeps Hermes's
+	// defaults: compress at half the model window, summarised by the main model.
+	// +optional
+	Compression *HermesCompression `json:"compression,omitempty"`
+}
+
+// HermesCompression sets when Hermes compresses a session and which model
+// writes the summary.
+type HermesCompression struct {
+	// ThresholdTokens compresses the session when its prompt reaches this many
+	// tokens, or the default half-window ratio, whichever is lower.
+	// +kubebuilder:validation:Minimum=8192
+	// +optional
+	ThresholdTokens *int32 `json:"thresholdTokens,omitempty"`
+
+	// MinTailUserMessages is how many of the newest user messages a
+	// compression keeps verbatim. Unset keeps Hermes's default of 1.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	// +optional
+	MinTailUserMessages *int32 `json:"minTailUserMessages,omitempty"`
+
+	// Model is the model ID that writes the summary. Hermes calls it through
+	// the ModelConfig's endpoint and credential, like the main model. Unset
+	// means the main model.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern=`^[^[:space:]]+$`
+	// +optional
+	Model string `json:"model,omitempty"`
+}
 
 // BYOHarness selects an image that implements kagent's private A2A contract.
 type BYOHarness struct{}

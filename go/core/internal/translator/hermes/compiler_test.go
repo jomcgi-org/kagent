@@ -182,3 +182,34 @@ func TestCompilePassesHarnessEnvironment(t *testing.T) {
 	}
 	t.Fatalf("environment = %#v", result.Revision.Environment)
 }
+
+func TestCompilePassesCompressionSettings(t *testing.T) {
+	input, collections := testInput(t, openRouter(v1alpha3.ModelConfigSpec{}), nil)
+	input.Harness.Spec.Hermes.Compression = &v1alpha3.HermesCompression{ThresholdTokens: new(int32(128000)), MinTailUserMessages: new(int32(3)), Model: "deepseek/deepseek-v4.1-flash-1017"}
+	result, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := hermesconfig.Parse(result.Revision.ConfigJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CompressionThresholdTokens != 128000 || cfg.CompressionMinTailUserMessages != 3 || cfg.CompressionModel != "deepseek/deepseek-v4.1-flash-1017" {
+		t.Fatalf("compression = %d %d %q", cfg.CompressionThresholdTokens, cfg.CompressionMinTailUserMessages, cfg.CompressionModel)
+	}
+	// The summary model shares the main model's origin, so egress is unchanged.
+	if got := strings.Join(result.Revision.EgressDestinations, ","); got != "http://kagent-controller.kagent:8083,https://openrouter.ai:443" {
+		t.Fatalf("egress = %s", got)
+	}
+}
+
+func TestCompileWithoutCompressionOmitsSettings(t *testing.T) {
+	input, collections := testInput(t, openRouter(v1alpha3.ModelConfigSpec{}), nil)
+	result, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(result.Revision.ConfigJSON), "compression") {
+		t.Fatalf("config names compression: %s", result.Revision.ConfigJSON)
+	}
+}

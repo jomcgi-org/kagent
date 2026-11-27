@@ -77,6 +77,11 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	}
 
 	cfg := hermesconfig.Production(strings.TrimSpace(model.Spec.Model), baseURL, input.Root.Instruction)
+	if compression := harness.Spec.Hermes.Compression; compression != nil {
+		cfg.CompressionThresholdTokens = int(ptr.Deref(compression.ThresholdTokens, 0))
+		cfg.CompressionMinTailUserMessages = int(ptr.Deref(compression.MinTailUserMessages, 0))
+		cfg.CompressionModel = strings.TrimSpace(compression.Model)
+	}
 	cfg.RuntimeTelemetry = telemetryConfig.RuntimeTelemetry(tracing.RuntimeHermes, input.AgentName, template.Namespace, model.Spec)
 	cfg.ControlPlaneURL = c.settings.GetControlPlaneUrl()
 	cfg.MaxContentLength = c.settings.MaxContentLength // Preserve unset versus unlimited.
