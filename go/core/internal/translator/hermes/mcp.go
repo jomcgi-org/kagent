@@ -37,6 +37,9 @@ func (c *Compiler) compileMCP(namespace string, tools []translator.ResolvedMCPTo
 			return mcpCompilation{}, fmt.Errorf("resolved Hermes MCP binding has no server")
 		}
 		name := translator.MCPRuntimeName(namespace, server)
+		if hermesconfig.ReservedMCPServerName(name) {
+			return mcpCompilation{}, translator.NewValidationError("Hermes RemoteMCPServer %q maps to Hermes toolset name %q; rename it", server.Name, name)
+		}
 		if _, ok := result.servers[name]; ok {
 			return mcpCompilation{}, translator.NewValidationError("RemoteMCPServer %q is bound more than once or shares Hermes name %q", server.Name, name)
 		}
@@ -54,6 +57,9 @@ func (c *Compiler) compileMCP(namespace string, tools []translator.ResolvedMCPTo
 			return mcpCompilation{}, translator.NewValidationError("Hermes does not support requireApproval on RemoteMCPServer %q", server.Name)
 		case len(tool.Binding.Tools) == 0:
 			return mcpCompilation{}, translator.NewValidationError("Hermes binding to RemoteMCPServer %q must list its tools", server.Name)
+		case strings.Contains(server.Spec.URL, "${") || slices.ContainsFunc(tool.Binding.Tools, func(t string) bool { return strings.Contains(t, "${") }):
+			// Hermes expands ${VAR} in every string of a server entry.
+			return mcpCompilation{}, translator.NewValidationError("Hermes RemoteMCPServer %q URL and tool names must not contain ${", server.Name)
 		}
 		parsed, err := url.Parse(strings.TrimSpace(server.Spec.URL))
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {

@@ -129,6 +129,7 @@ func TestRenderConfigEnablesOnlyListedMCPTools(t *testing.T) {
 	servers := cfg["mcp_servers"].(map[string]any)
 	require.Equal(t, map[string]any{
 		"url": "https://scotland.example.com/mcp", "enabled": true, "trust": "full",
+		"timeout": 30, "connect_timeout": 30, "strict_redirect_headers": true,
 		"tools":    map[string]any{"include": []any{"check", "plan"}, "resources": false, "prompts": false},
 		"sampling": map[string]any{"enabled": false}, "elicitation": map[string]any{"enabled": false},
 	}, servers["scotland"])
@@ -170,6 +171,13 @@ func TestWriteHomeWritesAndRemovesServerToolsPlugin(t *testing.T) {
 
 	_, err = RenderConfig(Settings{Model: "m", BaseURL: "https://api.anthropic.com", ServerTools: &ServerTools{}})
 	require.ErrorContains(t, err, "select no tool")
+
+	// Without code execution, the basic web tools, which run no code.
+	raw, err = serverToolsJSON(ServerTools{WebSearchMaxUses: 2, WebFetchMaxUses: 1})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"tools":[
+		{"type":"web_search_20250305","name":"web_search","max_uses":2},
+		{"type":"web_fetch_20250910","name":"web_fetch","max_uses":1}]}`, string(raw))
 }
 
 func TestWriteHomeReplacesConfigAndRemovesEnvFile(t *testing.T) {

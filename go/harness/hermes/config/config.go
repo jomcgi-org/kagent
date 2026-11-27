@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,6 +119,22 @@ type ServerTools struct {
 // runtime names use only these characters.
 var mcpServerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
 
+// BuiltinToolsets names every built-in Hermes v0.23.4 toolset. The runner
+// disables all of them.
+var BuiltinToolsets = []string{
+	"a2a", "browser", "catalog", "clarify", "code_execution", "computer_use",
+	"connections", "cronjob", "delegation", "desktop_ui", "discord",
+	"discord_admin", "feishu_doc", "feishu_drive", "file", "image_gen",
+	"kanban", "memory", "project", "search", "session_search", "skills",
+	"terminal", "todo", "tts", "video", "video_gen", "vision", "web", "x_search",
+}
+
+// ReservedMCPServerName reports whether Hermes would read name in
+// platform_toolsets as a built-in or composite toolset, not an MCP server.
+func ReservedMCPServerName(name string) bool {
+	return slices.Contains(BuiltinToolsets, name) || strings.HasPrefix(name, "hermes") || name == "no_mcp"
+}
+
 // Production returns the configuration the compiler emits for model.
 func Production(model, baseURL, instructions string) Config {
 	if baseURL == "" {
@@ -222,6 +239,13 @@ func (c Config) validateTools() error {
 		if !mcpServerName.MatchString(name) {
 			return fmt.Errorf("mcp_servers name %q must match %s", name, mcpServerName)
 		}
+		if ReservedMCPServerName(name) {
+			return fmt.Errorf("mcp_servers name %q is a Hermes toolset name", name)
+		}
+		// Hermes expands ${VAR} in every string of a server entry.
+		if strings.Contains(server.URL, "${") {
+			return fmt.Errorf("mcp_servers %q url must not reference variables", name)
+		}
 		u, err := url.Parse(server.URL)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
 			return fmt.Errorf("mcp_servers %q url must be an absolute HTTP(S) URL without credentials or fragment", name)
@@ -230,7 +254,7 @@ func (c Config) validateTools() error {
 			return fmt.Errorf("mcp_servers %q must list its tools", name)
 		}
 		for _, tool := range server.Tools {
-			if strings.TrimSpace(tool) == "" || strings.ContainsAny(tool, "*?[") {
+			if strings.TrimSpace(tool) == "" || strings.ContainsAny(tool, "*?[") || strings.Contains(tool, "${") {
 				return fmt.Errorf("mcp_servers %q tool %q must be an exact name", name, tool)
 			}
 		}

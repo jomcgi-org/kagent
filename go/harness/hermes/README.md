@@ -56,8 +56,8 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   Sampling, elicitation, and the resource and prompt utility tools are off,
   and Tool Search is off, so each MCP tool is in the request itself. A Secret
   header or `actorJwt` holds the credential placeholder, and the egress
-  gateway injects the value. An MCP server name must not be a Hermes toolset
-  name, such as `memory`.
+  gateway injects the value. The compiler and the runner reject an MCP
+  server named like a Hermes toolset, such as `memory`.
 - Anthropic server tools from `spec.hermes.serverTools` (`webSearch`,
   `webFetch` with `maxUses`, and `codeExecution`). They need a ModelConfig
   with the Anthropic provider. Hermes 0.23.4 builds the Anthropic `tools`
@@ -67,8 +67,26 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   Hermes keeps the answer text and drops the server tool blocks when it
   replays history. That edit can invalidate a later thinking block, so the
   plugin also sets `thinking.block_binding.prefix_mismatch_behavior:
-  drop_block` (beta `thinking-binding-controls-2026-08-01`). A
-  `pause_turn` stop ends the turn with the text so far.
+  drop_block` (beta `thinking-binding-controls-2026-08-01`) on adaptive
+  thinking, and adds adaptive thinking only on models that always think.
+  Without `codeExecution`, the web tools are the basic versions
+  (`web_search_20250305`, `web_fetch_20250910`), which run no code.
+- MCP entries carry the RemoteMCPServer default 30 s `timeout` and
+  `strict_redirect_headers: true`, which keeps headers on the configured
+  origin and turns off the SSE fallback. A URL, tool name or header value
+  with `${` is rejected: Hermes expands it.
+
+Server tool limits, not handled yet:
+
+- A `pause_turn` stop (Anthropic's server loop reached its limit) maps to
+  `stop`, so the turn ends with the text so far. `maxUses` keeps the loop
+  short.
+- If one response holds an MCP `tool_use` and a server tool that is still
+  pending, Hermes drops the server block when it sends the MCP result, so
+  that server call does not finish. Completed server blocks are dropped
+  too, which only removes them from history.
+- Each Messages request gets a new code execution container; files do not
+  carry over between model steps.
 
 The compiler rejects sub-agent tools, skills, plugins, Shared agents,
 structured output, `defaultHeaders`, TLS settings, `tokenPassthrough`,

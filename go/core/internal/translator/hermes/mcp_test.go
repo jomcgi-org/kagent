@@ -32,7 +32,7 @@ func bindMCP(input *translator.HarnessInput, server *v1alpha3.RemoteMCPServer, t
 
 func TestCompileMCPServers(t *testing.T) {
 	input, collections := testInput(t, openRouter(v1alpha3.ModelConfigSpec{}), map[string][]byte{"token": []byte(credentialValue)})
-	recall := mcpServer("memory", "http://hindsight.test.svc:8888/mcp/", v1alpha3.ValueRef{Name: "Authorization", ValueFrom: &v1alpha3.ValueSource{Type: v1alpha3.SecretValueSource, Name: "model-auth", Key: "token"}})
+	recall := mcpServer("recall", "http://hindsight.test.svc:8888/mcp/", v1alpha3.ValueRef{Name: "Authorization", ValueFrom: &v1alpha3.ValueSource{Type: v1alpha3.SecretValueSource, Name: "model-auth", Key: "token"}})
 	public := mcpServer("scotland", "https://scotland.example.com/mcp")
 	bindMCP(input, recall, "recall")
 	bindMCP(input, public, "plan", "check", "plan")
@@ -49,7 +49,7 @@ func TestCompileMCPServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	memory := cfg.MCPServers["memory"]
+	memory := cfg.MCPServers["recall"]
 	if memory.URL != recall.Spec.URL || memory.Headers["Authorization"] != translator.CredentialPlaceholder || strings.Join(memory.Tools, ",") != "recall" {
 		t.Fatalf("memory server = %#v", memory)
 	}
@@ -90,6 +90,9 @@ func TestCompileMCPRejectsUnsafeBindings(t *testing.T) {
 			return s
 		}(), tools: []string{"read"}, wantErr: "Streamable HTTP"},
 		{name: "variable header", server: mcpServer("open", "https://mcp.example.com/mcp", v1alpha3.ValueRef{Name: "X-Key", Value: "${HOME}"}), tools: []string{"read"}, wantErr: "must not contain ${"},
+		{name: "variable URL", server: mcpServer("open", "https://mcp.example.com/mcp?k=${API_SERVER_KEY}"), tools: []string{"read"}, wantErr: "must not contain ${"},
+		{name: "variable tool", server: mcpServer("open", "https://mcp.example.com/mcp"), tools: []string{"${TOOL}"}, wantErr: "must not contain ${"},
+		{name: "toolset name", server: mcpServer("memory", "https://mcp.example.com/mcp"), tools: []string{"read"}, wantErr: "Hermes toolset name"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

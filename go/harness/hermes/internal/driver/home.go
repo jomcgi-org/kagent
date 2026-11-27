@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/kagent-dev/kagent/go/harness/hermes/config"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 )
 
@@ -24,13 +25,7 @@ const CredentialPlaceholder = "kagent-credential-injected"
 // DisabledToolsets names every built-in Hermes v0.23.4 toolset. The empty
 // api_server platform list already enables none; this list also strips them
 // if a later config adds a platform list.
-var DisabledToolsets = []string{
-	"a2a", "browser", "catalog", "clarify", "code_execution", "computer_use",
-	"connections", "cronjob", "delegation", "desktop_ui", "discord",
-	"discord_admin", "feishu_doc", "feishu_drive", "file", "image_gen",
-	"kanban", "memory", "project", "search", "session_search", "skills",
-	"terminal", "todo", "tts", "video", "video_gen", "vision", "web", "x_search",
-}
+var DisabledToolsets = config.BuiltinToolsets
 
 // Settings are the values the adapter renders into Hermes' configuration.
 type Settings struct {
@@ -160,13 +155,19 @@ type promptCachingConfig struct {
 // mcpServerConfig is one mcp_servers entry. Sampling and elicitation are
 // off: a server must not start model calls or ask a person for input.
 type mcpServerConfig struct {
-	URL         string            `yaml:"url"`
-	Headers     map[string]string `yaml:"headers,omitempty"`
-	Enabled     bool              `yaml:"enabled"`
-	Trust       string            `yaml:"trust"`
-	Tools       mcpToolsConfig    `yaml:"tools"`
-	Sampling    switchConfig      `yaml:"sampling"`
-	Elicitation switchConfig      `yaml:"elicitation"`
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers,omitempty"`
+	Enabled bool              `yaml:"enabled"`
+	// Timeout and ConnectTimeout are kagent's RemoteMCPServer default.
+	Timeout        int `yaml:"timeout"`
+	ConnectTimeout int `yaml:"connect_timeout"`
+	// StrictRedirectHeaders keeps configured headers on the server's origin
+	// and turns off the SSE fallback.
+	StrictRedirectHeaders bool           `yaml:"strict_redirect_headers"`
+	Trust                 string         `yaml:"trust"`
+	Tools                 mcpToolsConfig `yaml:"tools"`
+	Sampling              switchConfig   `yaml:"sampling"`
+	Elicitation           switchConfig   `yaml:"elicitation"`
 }
 
 // mcpToolsConfig registers only Include, and none of Hermes' resource and
@@ -293,7 +294,7 @@ func renderMCPServers(servers map[string]MCPServer) (map[string]mcpServerConfig,
 	for name, server := range servers {
 		// platform_toolsets resolves a built-in or composite toolset name
 		// before an MCP server of the same name.
-		if slices.Contains(DisabledToolsets, name) || strings.HasPrefix(name, "hermes") || name == "no_mcp" {
+		if config.ReservedMCPServerName(name) {
 			return nil, nil, fmt.Errorf("hermes MCP server name %q is a built-in toolset", name)
 		}
 		if strings.TrimSpace(server.URL) == "" || len(server.Tools) == 0 {
@@ -303,6 +304,7 @@ func renderMCPServers(servers map[string]MCPServer) (map[string]mcpServerConfig,
 		slices.Sort(tools)
 		rendered[name] = mcpServerConfig{
 			URL: server.URL, Headers: server.Headers, Enabled: true, Trust: "full",
+			Timeout: 30, ConnectTimeout: 30, StrictRedirectHeaders: true,
 			Tools: mcpToolsConfig{Include: slices.Compact(tools)},
 		}
 		names = append(names, name)
@@ -321,12 +323,19 @@ func serverToolsJSON(t ServerTools) ([]byte, error) {
 	if t.WebSearchMaxUses < 0 || t.WebSearchMaxUses > 20 || t.WebFetchMaxUses < 0 || t.WebFetchMaxUses > 20 {
 		return nil, fmt.Errorf("hermes server tool max uses must be between 0 and 20")
 	}
+	// The 20260209 web tools filter results with code execution, so they
+	// come only with codeExecution; otherwise the basic versions, which run
+	// no code.
+	search, fetch := "web_search_20250305", "web_fetch_20250910"
+	if t.CodeExecution {
+		search, fetch = "web_search_20260209", "web_fetch_20260209"
+	}
 	var tools []map[string]any
 	if t.WebSearchMaxUses > 0 {
-		tools = append(tools, map[string]any{"type": "web_search_20260209", "name": "web_search", "max_uses": t.WebSearchMaxUses})
+		tools = append(tools, map[string]any{"type": search, "name": "web_search", "max_uses": t.WebSearchMaxUses})
 	}
 	if t.WebFetchMaxUses > 0 {
-		tools = append(tools, map[string]any{"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": t.WebFetchMaxUses})
+		tools = append(tools, map[string]any{"type": fetch, "name": "web_fetch", "max_uses": t.WebFetchMaxUses})
 	}
 	if t.CodeExecution {
 		tools = append(tools, map[string]any{"type": "code_execution_20260521", "name": "code_execution"})

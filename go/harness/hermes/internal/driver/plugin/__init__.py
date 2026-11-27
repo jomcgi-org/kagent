@@ -18,6 +18,9 @@ from pathlib import Path
 _CONFIG = json.loads(Path(__file__).with_name("server_tools.json").read_text())
 _TOOLS = _CONFIG["tools"]
 _BINDING_BETA = "thinking-binding-controls-2026-08-01"
+# Models that reject disabled thinking (agent/anthropic_adapter.py
+# _MANDATORY_THINKING_CLAUDE_SUBSTRINGS at v0.23.4).
+_ALWAYS_THINKING = ("claude-fable", "claude-mythos", "claude-opus-5-5", "claude-opus-5.5")
 
 
 def _merge_beta(headers, beta):
@@ -37,9 +40,14 @@ def add_server_tools(request=None, api_mode=None, **_):
     tools = [t for t in request.get("tools") or [] if isinstance(t, dict)]
     names = {t.get("name") for t in tools}
     request["tools"] = tools + [dict(t) for t in _TOOLS if t["name"] not in names]
+    # block_binding works only with adaptive thinking. Keep the adapter's
+    # mode; add adaptive thinking only where the model always thinks, so an
+    # omitted field and adaptive are the same request.
     thinking = request.get("thinking")
-    if thinking is None or (isinstance(thinking, dict) and thinking.get("type") == "adaptive"):
-        thinking = dict(thinking or {"type": "adaptive"})
+    if thinking is None and str(request.get("model", "")).startswith(_ALWAYS_THINKING):
+        thinking = {"type": "adaptive"}
+    if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        thinking = dict(thinking)
         thinking["block_binding"] = {"prefix_mismatch_behavior": "drop_block"}
         request["thinking"] = thinking
         request["extra_headers"] = _merge_beta(request.get("extra_headers"), _BINDING_BETA)
