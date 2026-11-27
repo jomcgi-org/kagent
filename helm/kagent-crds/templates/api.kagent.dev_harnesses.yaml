@@ -86,7 +86,9 @@ spec:
                 description: |-
                   IdleSuspendDelay keeps a Session's runtime running for this long after
                   its last turn settles, so follow-up turns skip restore and harness
-                  startup. A new turn restarts the delay. Unset or zero suspends at once.
+                  startup. A new turn restarts the delay, and a checkpoint of the held
+                  turn ends it. Suspension can follow up to one quiescence recovery
+                  interval after the delay. Unset or zero suspends at once.
                 type: string
                 x-kubernetes-validations:
                 - message: idleSuspendDelay must be between 0s and 1h

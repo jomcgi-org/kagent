@@ -72,6 +72,19 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 	return nil
 }
 
+// Expedite ends a held turn's idle suspend delay and wakes a worker, so a
+// checkpoint waiting on the turn's snapshot does not wait for the delay.
+func (w *ActorWorkflow) Expedite(ctx context.Context, sessionID string) error {
+	expedited, err := w.store.ExpediteSessionQuiescence(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if expedited {
+		w.wakeQuiescence()
+	}
+	return nil
+}
+
 func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.SessionQuiescence) {
 	runtimeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	snapshot, err := w.Quiesce(runtimeCtx, work.Session)

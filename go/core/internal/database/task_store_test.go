@@ -564,8 +564,9 @@ func TestIdleSuspendDelayHoldsQuiescenceUntilDue(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, pending) // Workers wait for the recovery scan instead of polling.
 
-	_, err = db.Exec(t.Context(), `UPDATE session_task_event SET created_at = created_at - interval '11 minutes' WHERE sequence = $1`, version)
+	expedited, err := client.ExpediteSessionQuiescence(t.Context(), session.Id)
 	require.NoError(t, err)
+	require.True(t, expedited) // A checkpoint needs the held turn's snapshot now.
 	pending, err = client.HasPendingSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.True(t, pending)

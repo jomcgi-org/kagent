@@ -156,7 +156,13 @@ func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, s
 }
 
 type testWorkflow struct {
-	session *apiv1.Session
+	session   *apiv1.Session
+	expedited []string
+}
+
+func (w *testWorkflow) Expedite(_ context.Context, sessionID string) error {
+	w.expedited = append(w.expedited, sessionID)
+	return nil
 }
 
 func (w *testWorkflow) Create(_ context.Context, session *apiv1.Session) (*apiv1.Session, error) {
@@ -266,9 +272,15 @@ func TestCreateDistinguishesPendingSnapshotFromAdvancedConversation(t *testing.T
 		{database.ErrSnapshotPending, "KAGENT_CHECKPOINT_SNAPSHOT_PENDING"},
 		{database.ErrCheckpointAdvanced, "KAGENT_CHECKPOINT_CONVERSATION_ADVANCED"},
 	} {
-		service := NewService(&testStore{reserveErr: test.err}, testAuthorizer{}, &testTags{}, &testWorkflow{})
+		workflow := &testWorkflow{}
+		service := NewService(&testStore{reserveErr: test.err}, testAuthorizer{}, &testTags{}, workflow)
 		ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
 		_, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request", "task-a")
+		if test.err == database.ErrSnapshotPending {
+			require.Equal(t, []string{"018f47a2-4efb-7c21-a848-123456789abc"}, workflow.expedited)
+		} else {
+			require.Empty(t, workflow.expedited)
+		}
 		require.Equal(t, codes.FailedPrecondition, status.Code(err))
 		details := status.Convert(err).Details()
 		require.Len(t, details, 1)
