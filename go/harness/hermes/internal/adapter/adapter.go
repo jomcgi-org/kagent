@@ -37,7 +37,8 @@ func New(_ context.Context, input Input) (*driver.Driver, error) {
 	return driver.New(driver.Config{
 		GatewayCommand: cfg.GatewayCommand, Home: config.HermesHome(input.DurableDir), Port: cfg.APIServerPort,
 		Settings: driver.Settings{
-			Model: cfg.Model, BaseURL: cfg.BaseURL, APIKey: lookup(input.Environment, config.APIKeyEnvName),
+			Model: cfg.Model, BaseURL: cfg.BaseURL, APIKey: lookup(input.Environment, cfg.APIKeyEnv()),
+			APIMode: cfg.APIMode, CacheTTL: cfg.CacheTTL,
 			CompressionThresholdTokens: cfg.CompressionThresholdTokens, CompressionMinTailUserMessages: cfg.CompressionMinTailUserMessages,
 			CompressionModel: cfg.CompressionModel,
 		},

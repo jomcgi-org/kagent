@@ -20,10 +20,20 @@ const (
 	PinnedHermesVersion = "0.23.4"
 	// DefaultBaseURL is OpenAI's API, the ModelConfig OpenAI provider default.
 	DefaultBaseURL = "https://api.openai.com/v1"
+	// DefaultAnthropicBaseURL is the Anthropic provider default. Hermes
+	// adds /v1/messages itself.
+	DefaultAnthropicBaseURL = "https://api.anthropic.com"
 	// APIKeyEnvName carries the model credential placeholder. The compiler
 	// binds the real key to the egress gateway, so the Actor receives only
 	// translator.CredentialPlaceholder or nothing.
 	APIKeyEnvName = "OPENAI_API_KEY"
+	// AnthropicAPIKeyEnvName carries the placeholder for an Anthropic
+	// ModelConfig, which kagent binds to the gateway's x-api-key header.
+	AnthropicAPIKeyEnvName = "ANTHROPIC_API_KEY"
+	// APIModeChatCompletions and APIModeAnthropicMessages are the Hermes
+	// provider api_mode values the adapter writes.
+	APIModeChatCompletions   = "chat_completions"
+	APIModeAnthropicMessages = "anthropic_messages"
 	// HermesHomeEnvName, and the API_SERVER_* names, belong to the adapter.
 	HermesHomeEnvName = "HERMES_HOME"
 )
@@ -37,7 +47,7 @@ func OwnsEnvironment(name string) bool {
 	if strings.HasPrefix(name, "API_SERVER_") || strings.HasPrefix(name, "HERMES_") {
 		return true
 	}
-	return name == APIKeyEnvName
+	return name == APIKeyEnvName || name == AnthropicAPIKeyEnvName
 }
 
 // Config is the compiler-owned Hermes runtime configuration.
@@ -51,8 +61,14 @@ type Config struct {
 	GatewayCommand []string `json:"gateway_command"`
 	// Model is the provider model ID, such as deepseek/deepseek-v4.1-flash.
 	Model string `json:"model"`
-	// BaseURL is the OpenAI-compatible endpoint Hermes calls as a custom provider.
+	// BaseURL is the endpoint Hermes calls as its named provider.
 	BaseURL string `json:"base_url"`
+	// APIMode is the provider's wire protocol: empty or chat_completions for
+	// an OpenAI-compatible endpoint, anthropic_messages for Anthropic.
+	APIMode string `json:"api_mode,omitempty"`
+	// CacheTTL is Hermes prompt_caching.cache_ttl: 5m, 1h or off. Empty
+	// keeps Hermes's default.
+	CacheTTL string `json:"cache_ttl,omitempty"`
 	// Instructions is the compiled system prompt, sent with every turn.
 	Instructions string `json:"instructions,omitempty"`
 	// CompressionThresholdTokens is Hermes's compression.threshold_tokens.
@@ -123,6 +139,16 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Model) == "" {
 		return fmt.Errorf("model is required")
 	}
+	switch c.APIMode {
+	case "", APIModeChatCompletions, APIModeAnthropicMessages:
+	default:
+		return fmt.Errorf("api_mode must be chat_completions or anthropic_messages")
+	}
+	switch c.CacheTTL {
+	case "", "5m", "1h", "off":
+	default:
+		return fmt.Errorf("cache_ttl must be 5m, 1h or off")
+	}
 	if c.CompressionThresholdTokens < 0 {
 		return fmt.Errorf("compression_threshold_tokens must be nonnegative")
 	}
@@ -149,6 +175,15 @@ func (c Config) Validate() error {
 		return fmt.Errorf("hermes runtime telemetry names runtime %q", runtime)
 	}
 	return nil
+}
+
+// APIKeyEnv is the environment variable that holds the model credential
+// placeholder for c's provider.
+func (c Config) APIKeyEnv() string {
+	if c.APIMode == APIModeAnthropicMessages {
+		return AnthropicAPIKeyEnvName
+	}
+	return APIKeyEnvName
 }
 
 func (c Config) StartupTimeout() time.Duration {

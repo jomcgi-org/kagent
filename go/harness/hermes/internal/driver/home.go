@@ -36,6 +36,10 @@ type Settings struct {
 	BaseURL string
 	// APIKey is the key Hermes sends. Empty means CredentialPlaceholder.
 	APIKey string
+	// APIMode is the provider's api_mode. Empty means chat_completions.
+	APIMode string
+	// CacheTTL is prompt_caching.cache_ttl. Empty keeps Hermes's default.
+	CacheTTL string
 	// CompressionThresholdTokens is compression.threshold_tokens. Zero keeps
 	// Hermes's ratio-only trigger.
 	CompressionThresholdTokens int
@@ -54,7 +58,10 @@ type modelConfig struct {
 	Provider string `yaml:"provider"`
 }
 
-// providerConfig is one named OpenAI-compatible endpoint. Hermes 0.23.4
+// providerConfig is one named endpoint: OpenAI-compatible chat completions,
+// or Anthropic Messages, where Hermes sends a non-OAuth key as x-api-key
+// (agent/anthropic_adapter.py) and marks cache_control on api.anthropic.com
+// (agent/agent_runtime_helpers.py anthropic_prompt_cache_policy). Hermes 0.23.4
 // takes a named entry's own api_key before any environment key, for every
 // host. A bare `provider: custom` with model.base_url resolves only for a
 // loopback host: for a remote host, such as openrouter.ai, it ignores
@@ -114,6 +121,12 @@ type compressionConfig struct {
 	MinTailUserMessages int `yaml:"min_tail_user_messages,omitempty"`
 }
 
+// promptCachingConfig is the prompt_caching: block. Hermes 0.23.4 defaults
+// api_server sessions to a 5m TTL (hermes_cli/config_defaults.py).
+type promptCachingConfig struct {
+	CacheTTL string `yaml:"cache_ttl"`
+}
+
 type hermesConfig struct {
 	Model            modelConfig               `yaml:"model"`
 	Providers        map[string]providerConfig `yaml:"providers"`
@@ -125,6 +138,7 @@ type hermesConfig struct {
 	Security         securityConfig            `yaml:"security"`
 	Auxiliary        auxiliaryConfig           `yaml:"auxiliary"`
 	Compression      *compressionConfig        `yaml:"compression,omitempty"`
+	PromptCaching    *promptCachingConfig      `yaml:"prompt_caching,omitempty"`
 }
 
 // hindsightConfig is $HERMES_HOME/hindsight/config.json. It stays inert
@@ -148,6 +162,14 @@ func RenderConfig(s Settings) ([]byte, error) {
 	if model := strings.TrimSpace(s.CompressionModel); model != "" {
 		auxiliary.Compression = &auxiliaryTaskConfig{Provider: ProviderName, Model: model}
 	}
+	apiMode := s.APIMode
+	if apiMode == "" {
+		apiMode = "chat_completions"
+	}
+	var caching *promptCachingConfig
+	if s.CacheTTL != "" {
+		caching = &promptCachingConfig{CacheTTL: s.CacheTTL}
+	}
 	var compression *compressionConfig
 	if s.CompressionThresholdTokens > 0 || s.CompressionMinTailUserMessages > 0 {
 		compression = &compressionConfig{ThresholdTokens: s.CompressionThresholdTokens, MinTailUserMessages: s.CompressionMinTailUserMessages}
@@ -155,7 +177,7 @@ func RenderConfig(s Settings) ([]byte, error) {
 	return yaml.Marshal(hermesConfig{
 		Model: modelConfig{Default: s.Model, Provider: ProviderName},
 		Providers: map[string]providerConfig{ProviderName: {
-			Name: ProviderName, BaseURL: s.BaseURL, APIKey: s.APIKey, APIMode: "chat_completions",
+			Name: ProviderName, BaseURL: s.BaseURL, APIKey: s.APIKey, APIMode: apiMode,
 		}},
 		// An explicit empty list enables no toolset and merges no MCP server
 		// (hermes_cli/tools_config.py _get_platform_tools at v0.23.4).
@@ -166,10 +188,11 @@ func RenderConfig(s Settings) ([]byte, error) {
 		// api_server sessions are unattended: unattended_mode deny refuses a
 		// flagged action at once instead of parking the turn, so a turn never
 		// waits on a person.
-		Approvals:   approvalsConfig{Mode: "manual", Timeout: 10, CronMode: "deny", SingleQueryMode: "deny", UnattendedMode: "deny"},
-		Security:    securityConfig{AllowLazyInstalls: false},
-		Auxiliary:   auxiliary,
-		Compression: compression,
+		Approvals:     approvalsConfig{Mode: "manual", Timeout: 10, CronMode: "deny", SingleQueryMode: "deny", UnattendedMode: "deny"},
+		Security:      securityConfig{AllowLazyInstalls: false},
+		Auxiliary:     auxiliary,
+		Compression:   compression,
+		PromptCaching: caching,
 	})
 }
 

@@ -65,6 +65,16 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	if err != nil {
 		return nil, err
 	}
+	apiMode, cacheTTL := "", ""
+	if model.Spec.Provider == v1alpha3.ModelProviderAnthropic {
+		apiMode, cacheTTL = hermesconfig.APIModeAnthropicMessages, "off"
+		if a := model.Spec.Anthropic; a != nil && a.PromptCaching {
+			cacheTTL = a.CacheTTL
+			if cacheTTL == "" {
+				cacheTTL = "5m"
+			}
+		}
+	}
 	for _, variable := range harness.Spec.Env {
 		if hermesconfig.OwnsEnvironment(variable.Name) {
 			return nil, translator.NewValidationError("Harness env %q conflicts with Hermes's compiled configuration", variable.Name)
@@ -77,6 +87,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	}
 
 	cfg := hermesconfig.Production(strings.TrimSpace(model.Spec.Model), baseURL, input.Root.Instruction)
+	cfg.APIMode, cfg.CacheTTL = apiMode, cacheTTL
 	if compression := harness.Spec.Hermes.Compression; compression != nil {
 		cfg.CompressionThresholdTokens = int(ptr.Deref(compression.ThresholdTokens, 0))
 		cfg.CompressionMinTailUserMessages = int(ptr.Deref(compression.MinTailUserMessages, 0))
@@ -123,10 +134,15 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 }
 
 // compileProvider accepts an OpenAI-compatible ModelConfig, which Hermes
-// calls as its custom provider through chat completions.
+// calls as its named provider through chat completions, or an Anthropic one,
+// which it calls through the Messages API.
 func (c *Compiler) compileProvider(ctx context.Context, resolved *translator.ResolvedModelConfig) (baseURL string, environment []corev1.EnvVar, destination string, err error) {
 	model := resolved.Config
-	if model.Spec.Provider != v1alpha3.ModelProviderOpenAI {
+	switch model.Spec.Provider {
+	case v1alpha3.ModelProviderOpenAI:
+	case v1alpha3.ModelProviderAnthropic:
+		return c.compileAnthropic(ctx, resolved)
+	default:
 		return "", nil, "", translator.NewValidationError("Hermes does not support ModelConfig provider %q", model.Spec.Provider)
 	}
 	options := v1alpha3.OpenAIConfig{}
@@ -166,6 +182,45 @@ func (c *Compiler) compileProvider(ctx context.Context, resolved *translator.Res
 		// CompileCredentials binds the key to the egress gateway and leaves the
 		// Actor only a placeholder.
 		environment = []corev1.EnvVar{{Name: hermesconfig.APIKeyEnvName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: model.Spec.APIKeySecret}, Key: model.Spec.APIKeySecretKey,
+		}}}}
+	}
+	return baseURL, environment, destination, nil
+}
+
+// compileAnthropic accepts an Anthropic ModelConfig with an API key Secret.
+// Hermes sends the placeholder as x-api-key, and kagent binds that header
+// at the egress gateway.
+func (c *Compiler) compileAnthropic(ctx context.Context, resolved *translator.ResolvedModelConfig) (baseURL string, environment []corev1.EnvVar, destination string, err error) {
+	model := resolved.Config
+	options := v1alpha3.AnthropicConfig{}
+	if model.Spec.Anthropic != nil {
+		options = *model.Spec.Anthropic
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(options.BaseURL), "/")
+	options.BaseURL, options.PromptCaching, options.CacheTTL = "", false, ""
+	if !reflect.DeepEqual(options, v1alpha3.AnthropicConfig{}) {
+		return "", nil, "", translator.NewValidationError("Hermes does not support Anthropic provider options beyond baseUrl, promptCaching and cacheTTL")
+	}
+	if baseURL == "" {
+		baseURL = hermesconfig.DefaultAnthropicBaseURL
+	}
+	parsed, parseErr := url.Parse(baseURL)
+	if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
+		return "", nil, "", translator.NewValidationError("Hermes Anthropic baseUrl must be an absolute HTTP(S) URL without credentials or fragment")
+	}
+	destination = egress.Origin(parsed)
+	if model.Spec.ActorJWT != nil {
+		return "", nil, "", translator.NewValidationError("Hermes Anthropic does not support actorJwt")
+	}
+	if model.Spec.APIKeySecret != "" {
+		if model.Spec.APIKeySecretKey == "" {
+			return "", nil, "", translator.NewValidationError("Hermes Anthropic requires apiKeySecretKey with apiKeySecret")
+		}
+		if err := c.requireSecretKey(ctx, model.Namespace, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey); err != nil {
+			return "", nil, "", err
+		}
+		environment = []corev1.EnvVar{{Name: hermesconfig.AnthropicAPIKeyEnvName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: model.Spec.APIKeySecret}, Key: model.Spec.APIKeySecretKey,
 		}}}}
 	}

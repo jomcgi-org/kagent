@@ -14,6 +14,7 @@ import (
 	configv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/config/v1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	hermesconfig "github.com/kagent-dev/kagent/go/harness/hermes/config"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
@@ -134,7 +135,7 @@ func TestCompileRejectsUnsupportedInputs(t *testing.T) {
 		mutate  func(*translator.HarnessInput)
 		wantErr string
 	}{
-		{name: "provider", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude"}, wantErr: "does not support ModelConfig provider"},
+		{name: "provider", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderGemini, Model: "gemini"}, wantErr: "does not support ModelConfig provider"},
 		{name: "responses format", model: openRouter(v1alpha3.ModelConfigSpec{OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}}), wantErr: "chatCompletions"},
 		{name: "OpenAI options", model: openRouter(v1alpha3.ModelConfigSpec{OpenAI: &v1alpha3.OpenAIConfig{Temperature: "0.2"}}), wantErr: "beyond baseUrl"},
 		{name: "base URL", model: openRouter(v1alpha3.ModelConfigSpec{OpenAI: &v1alpha3.OpenAIConfig{BaseURL: "openrouter.ai"}}), wantErr: "absolute HTTP(S) URL"},
@@ -211,5 +212,84 @@ func TestCompileWithoutCompressionOmitsSettings(t *testing.T) {
 	}
 	if strings.Contains(string(result.Revision.ConfigJSON), "compression") {
 		t.Fatalf("config names compression: %s", result.Revision.ConfigJSON)
+	}
+}
+
+func TestCompileAnthropicUsesMessagesAndTheGatewayKey(t *testing.T) {
+	if hermesconfig.AnthropicAPIKeyEnvName != env.AnthropicAPIKey.Name() {
+		t.Fatalf("Hermes Anthropic key env %q, kagent binds %q", hermesconfig.AnthropicAPIKeyEnvName, env.AnthropicAPIKey.Name())
+	}
+	spec := v1alpha3.ModelConfigSpec{
+		Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-opus-5-5", APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+		Anthropic: &v1alpha3.AnthropicConfig{BaseURL: "https://api.anthropic.com", PromptCaching: true, CacheTTL: "1h"},
+	}
+	input, collections := testInput(t, spec, map[string][]byte{"api-key": []byte(credentialValue)})
+	result, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := result.Revision
+	cfg, err := hermesconfig.Parse(revision.ConfigJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIMode != hermesconfig.APIModeAnthropicMessages || cfg.CacheTTL != "1h" || cfg.BaseURL != "https://api.anthropic.com" || cfg.APIKeyEnv() != "ANTHROPIC_API_KEY" {
+		t.Fatalf("config = %#v", cfg)
+	}
+	if strings.Contains(string(revision.ConfigJSON), credentialValue) {
+		t.Fatal("config contains the credential")
+	}
+	var found bool
+	for _, variable := range revision.Environment {
+		if variable.ValueFrom != nil || strings.Contains(variable.Value, credentialValue) {
+			t.Fatalf("environment %q leaks a secret reference or value", variable.Name)
+		}
+		if variable.Name == hermesconfig.AnthropicAPIKeyEnvName {
+			found = variable.Value == translator.CredentialPlaceholder
+		}
+	}
+	if !found {
+		t.Fatalf("environment lacks the Anthropic placeholder: %#v", revision.Environment)
+	}
+	if len(revision.Credentials) != 1 || revision.Credentials[0].Origin != "https://api.anthropic.com:443" || revision.Credentials[0].Header != "x-api-key" || revision.Credentials[0].Prefix != "" {
+		t.Fatalf("credentials = %#v", revision.Credentials)
+	}
+	if got := strings.Join(revision.EgressDestinations, ","); got != "http://kagent-controller.kagent:8083,https://api.anthropic.com:443" {
+		t.Fatalf("egress = %s", got)
+	}
+}
+
+func TestCompileAnthropicCachingDefaultsAndRejectsOtherOptions(t *testing.T) {
+	for _, test := range []struct {
+		options *v1alpha3.AnthropicConfig
+		ttl     string
+	}{
+		{nil, "off"},
+		{&v1alpha3.AnthropicConfig{PromptCaching: true}, "5m"},
+	} {
+		input, collections := testInput(t, v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-opus-5-5", Anthropic: test.options}, nil)
+		result, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := hermesconfig.Parse(result.Revision.ConfigJSON)
+		if err != nil || cfg.CacheTTL != test.ttl || cfg.BaseURL != hermesconfig.DefaultAnthropicBaseURL {
+			t.Fatalf("config = %#v, %v; want cache_ttl %q", cfg, err, test.ttl)
+		}
+	}
+	input, collections := testInput(t, v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-opus-5-5", Anthropic: &v1alpha3.AnthropicConfig{MaxTokens: 10}}, nil)
+	if _, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input); err == nil || !strings.Contains(err.Error(), "beyond baseUrl") {
+		t.Fatalf("Compile() error = %v", err)
+	}
+}
+
+func TestCompileOpenAIKeepsTheChatCompletionsConfig(t *testing.T) {
+	input, collections := testInput(t, openRouter(v1alpha3.ModelConfigSpec{}), nil)
+	result, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw := string(result.Revision.ConfigJSON); strings.Contains(raw, "api_mode") || strings.Contains(raw, "cache_ttl") {
+		t.Fatalf("OpenAI config names Anthropic settings: %s", raw)
 	}
 }
