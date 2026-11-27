@@ -63,9 +63,19 @@ func TestParseRejectsInvalidConfig(t *testing.T) {
 				"foo-bar": {URL: "https://m.example.com/mcp", Tools: []string{"t"}},
 				"foo_bar": {URL: "https://n.example.com/mcp", Tools: []string{"t"}},
 			}
-		}, "same Hermes tool prefix"},
+		}, "same Hermes name"},
+		{"MCP server and tool boundary", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{
+				"docs":        {URL: "https://m.example.com/mcp", Tools: []string{"files__lookup"}},
+				"docs--files": {URL: "https://n.example.com/mcp", Tools: []string{"lookup"}},
+			}
+		}, "same Hermes name"},
 		{"MCP sanitized tool names", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"m": {URL: "https://m.example.com/mcp", Tools: []string{"a-b", "a_b"}}}
+		}, "same Hermes name"},
+		{"MCP clamped tool names", func(c *Config) {
+			long := strings.Repeat("a", 60)
+			c.MCPServers = map[string]MCPServer{"docs": {URL: "https://m.example.com/mcp", Tools: []string{long, HermesToolName("docs", long)[len("mcp__docs__"):]}}}
 		}, "same Hermes name"},
 		{"MCP canonical toolset name", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"mcp-foo": {URL: "https://m.example.com/mcp", Tools: []string{"t"}}}
@@ -112,5 +122,16 @@ func TestOwnsEnvironment(t *testing.T) {
 	}
 	if OwnsEnvironment("TZ") {
 		t.Fatal("TZ must not be reserved")
+	}
+}
+
+func TestHermesToolNameMatchesHermes(t *testing.T) {
+	// Values from Hermes v0.23.4 mcp_prefixed_tool_name.
+	if got := HermesToolName("foo.bar", "look-up"); got != "mcp__foo_bar__look_up" {
+		t.Fatalf("HermesToolName = %q", got)
+	}
+	long := HermesToolName("docs", strings.Repeat("a", 60))
+	if len(long) != 64 || long != "mcp__docs__"+strings.Repeat("a", 44)+"_1c0cc293" {
+		t.Fatalf("clamped HermesToolName = %q", long)
 	}
 }

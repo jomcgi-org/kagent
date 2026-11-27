@@ -154,7 +154,7 @@ func TestCompileMCPRejectsServersWithOneHermesName(t *testing.T) {
 	bindMCP(input, mcpServer("foo-bar", "https://a.example.com/mcp"), "lookup")
 	bindMCP(input, mcpServer("foo.bar", "https://b.example.com/mcp"), "lookup")
 	_, err := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults()).Compile(context.Background(), input)
-	if err == nil || !strings.Contains(err.Error(), "same Hermes tool prefix") {
+	if err == nil || !strings.Contains(err.Error(), "same Hermes name") {
 		t.Fatalf("Compile() error = %v", err)
 	}
 }

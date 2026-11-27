@@ -3,9 +3,12 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -244,29 +247,34 @@ func (c Config) APIKeyEnv() string {
 	return APIKeyEnvName
 }
 
-// hermesNamePart is Hermes's sanitize_mcp_name_component: it names a tool
-// mcp__<server>__<tool> with every character outside [A-Za-z0-9_] as _.
+// hermesNamePart is Hermes's sanitize_mcp_name_component: every character
+// outside [A-Za-z0-9_] becomes _.
 var hermesNamePart = regexp.MustCompile(`[^A-Za-z0-9_]`)
 
-func (c Config) validateTools() error {
-	// Hermes registers the first of two tools with the same final name and
-	// skips the other, so distinct servers or tools must stay distinct.
-	sanitized := map[string]string{}
-	for name := range c.MCPServers {
-		key := hermesNamePart.ReplaceAllString(name, "_")
-		if other, ok := sanitized[key]; ok {
-			return fmt.Errorf("mcp_servers %q and %q have the same Hermes tool prefix %q", other, name, key)
-		}
-		sanitized[key] = name
+// HermesToolName is the name Hermes v0.23.4 registers for an MCP tool
+// (tools/mcp_tool_schema.py mcp_prefixed_tool_name): mcp__<server>__<tool>,
+// sanitized, and over 64 characters clamped with a hash suffix.
+func HermesToolName(server, tool string) string {
+	full := "mcp__" + hermesNamePart.ReplaceAllString(server, "_") + "__" + hermesNamePart.ReplaceAllString(tool, "_")
+	if len(full) <= 64 {
+		return full
 	}
-	for name, server := range c.MCPServers {
-		tools := map[string]string{}
-		for _, tool := range server.Tools {
-			key := hermesNamePart.ReplaceAllString(tool, "_")
-			if other, ok := tools[key]; ok && other != tool {
-				return fmt.Errorf("mcp_servers %q tools %q and %q have the same Hermes name", name, other, tool)
+	sum := sha256.Sum256([]byte(full))
+	suffix := "_" + hex.EncodeToString(sum[:])[:8]
+	return full[:64-len(suffix)] + suffix
+}
+
+func (c Config) validateTools() error {
+	// Hermes registers the first of two tools with the same name and skips
+	// the rest, so every listed tool must get its own name.
+	owners := map[string]string{}
+	for _, name := range slices.Sorted(maps.Keys(c.MCPServers)) {
+		for _, tool := range c.MCPServers[name].Tools {
+			final, owner := HermesToolName(name, tool), name+"/"+tool
+			if other, ok := owners[final]; ok && other != owner {
+				return fmt.Errorf("mcp_servers tools %s and %s have the same Hermes name %q", other, owner, final)
 			}
-			tools[key] = tool
+			owners[final] = owner
 		}
 	}
 	for name, server := range c.MCPServers {
