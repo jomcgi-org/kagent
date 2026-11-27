@@ -1,0 +1,68 @@
+"""Adds the compiled Anthropic server tools to each Messages API turn request.
+
+Hermes 0.23.4 builds the Anthropic ``tools`` list from function tools only
+(agent/anthropic_message_convert.py convert_tools_to_anthropic), so this
+llm_request middleware appends the server tool entries the kagent adapter
+wrote into ``server_tools.json`` beside this file. Anthropic runs these tools;
+the Actor makes no request to their targets.
+
+Hermes replays a turn's text and thinking but drops server tool blocks
+(``_sanitize_replay_block`` keeps known types only). That edits the history
+before later thinking blocks, so each request also asks the API to drop a
+mismatched thinking block instead of failing with HTTP 400.
+"""
+
+import json
+from pathlib import Path
+
+_CONFIG = json.loads(Path(__file__).with_name("server_tools.json").read_text())
+_TOOLS = _CONFIG["tools"]
+_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+# Models that reject disabled thinking (agent/anthropic_adapter.py
+# _MANDATORY_THINKING_CLAUDE_SUBSTRINGS at v0.23.4).
+_ALWAYS_THINKING = ("claude-fable", "claude-mythos", "claude-opus-5-5", "claude-opus-5.5")
+
+
+def _merge_beta(headers, beta):
+    headers = dict(headers or {})
+    key = next((k for k in headers if k.lower() == "anthropic-beta"), "anthropic-beta")
+    betas = [b.strip() for b in str(headers.get(key, "")).split(",") if b.strip()]
+    if beta not in betas:
+        betas.append(beta)
+    headers[key] = ",".join(betas)
+    return headers
+
+
+def add_server_tools(request=None, api_mode=None, **_):
+    if api_mode != "anthropic_messages" or not isinstance(request, dict):
+        return None
+    request = dict(request)
+    tools = [t for t in request.get("tools") or [] if isinstance(t, dict)]
+    names = {t.get("name") for t in tools}
+    request["tools"] = tools + [dict(t) for t in _TOOLS if t["name"] not in names]
+    # One tool call per model step. A server call next to an MCP call can
+    # still be pending when the step stops for the MCP call, and Hermes drops
+    # the server block when it sends the MCP result, so that call would
+    # never finish.
+    choice = request.get("tool_choice")
+    if choice is None:
+        choice = {"type": "auto"}
+    if isinstance(choice, dict) and choice.get("type") in ("auto", "any", "tool"):
+        request["tool_choice"] = {**choice, "disable_parallel_tool_use": True}
+    # block_binding works only with adaptive thinking. Keep the adapter's
+    # mode; add adaptive thinking only where the model always thinks, so an
+    # omitted field and adaptive are the same request.
+    thinking = request.get("thinking")
+    model = str(request.get("model", "")).lower()
+    if thinking is None and any(name in model for name in _ALWAYS_THINKING):
+        thinking = {"type": "adaptive"}
+    if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        thinking = dict(thinking)
+        thinking["block_binding"] = {"prefix_mismatch_behavior": "drop_block"}
+        request["thinking"] = thinking
+        request["extra_headers"] = _merge_beta(request.get("extra_headers"), _BINDING_BETA)
+    return {"request": request, "source": "kagent-server-tools", "reason": "add Anthropic server tools"}
+
+
+def register(ctx):
+    ctx.register_middleware("llm_request", add_server_tools)

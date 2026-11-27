@@ -3,10 +3,15 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -80,6 +85,12 @@ type Config struct {
 	// CompressionModel is the summary model, called through the same endpoint
 	// as Model. Empty means Model.
 	CompressionModel string `json:"compression_model,omitempty"`
+	// MCPServers are the Streamable HTTP MCP servers Hermes connects to, by
+	// Hermes server name. Each lists the only tools Hermes registers.
+	MCPServers map[string]MCPServer `json:"mcp_servers,omitempty"`
+	// ServerTools are the Anthropic server tools added to each Messages API
+	// request of a turn. Nil adds none.
+	ServerTools *ServerTools `json:"server_tools,omitempty"`
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy. It is absent for standalone runs.
 	RuntimeTelemetry     tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
@@ -88,6 +99,53 @@ type Config struct {
 	TurnTimeoutMillis    int                      `json:"turn_timeout_millis"`
 	StopGraceMillis      int                      `json:"stop_grace_millis"`
 	MaxResponseBytes     int                      `json:"max_response_bytes"`
+}
+
+// MCPServer is one remote MCP server. Header values are literals or the
+// credential placeholder that the egress gateway replaces.
+type MCPServer struct {
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
+	// Tools is the explicit allowlist, rendered as tools.include.
+	Tools []string `json:"tools"`
+}
+
+// ServerTools selects Anthropic server tools. A zero MaxUses leaves a web
+// tool out.
+type ServerTools struct {
+	WebSearchMaxUses int  `json:"web_search_max_uses,omitempty"`
+	WebFetchMaxUses  int  `json:"web_fetch_max_uses,omitempty"`
+	CodeExecution    bool `json:"code_execution,omitempty"`
+}
+
+// mcpServerName matches the names Hermes prefixes onto tool names. Kagent's
+// runtime names use only these characters.
+var mcpServerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
+
+// BuiltinToolsets names every built-in Hermes v0.23.4 toolset. The runner
+// disables all of them.
+var BuiltinToolsets = []string{
+	"a2a", "browser", "catalog", "clarify", "code_execution", "computer_use",
+	"connections", "cronjob", "delegation", "desktop_ui", "discord",
+	"discord_admin", "feishu_doc", "feishu_drive", "file", "image_gen",
+	"kanban", "memory", "project", "search", "session_search", "skills",
+	"terminal", "todo", "tts", "video", "video_gen", "vision", "web", "x_search",
+}
+
+// toolsetSelectors are the other names Hermes v0.23.4 resolves in
+// platform_toolsets before an MCP server (toolsets.py TOOLSETS keys and
+// selectors). A server so named would merge into that toolset.
+var toolsetSelectors = []string{
+	"all", "bot_room", "coding", "context_engine", "debugging", "no_mcp", "onboarding", "safe",
+}
+
+// ReservedMCPServerName reports whether Hermes would read name in
+// platform_toolsets as a built-in or composite toolset, not an MCP server.
+func ReservedMCPServerName(name string) bool {
+	// Hermes names each server's toolset mcp-<name>, and resolves a listed
+	// mcp-<name> to server <name>.
+	return slices.Contains(BuiltinToolsets, name) || slices.Contains(toolsetSelectors, name) ||
+		strings.HasPrefix(name, "hermes") || strings.HasPrefix(name, "mcp-")
 }
 
 // Production returns the configuration the compiler emits for model.
@@ -158,6 +216,9 @@ func (c Config) Validate() error {
 	if c.CompressionModel != strings.TrimSpace(c.CompressionModel) || strings.ContainsAny(c.CompressionModel, " \t\r\n") {
 		return fmt.Errorf("compression_model must not contain whitespace")
 	}
+	if err := c.validateTools(); err != nil {
+		return err
+	}
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return fmt.Errorf("base_url must be an absolute HTTP(S) URL without credentials or fragment")
@@ -184,6 +245,81 @@ func (c Config) APIKeyEnv() string {
 		return AnthropicAPIKeyEnvName
 	}
 	return APIKeyEnvName
+}
+
+// hermesNamePart is Hermes's sanitize_mcp_name_component: every character
+// outside [A-Za-z0-9_] becomes _.
+var hermesNamePart = regexp.MustCompile(`[^A-Za-z0-9_]`)
+
+// HermesToolName is the name Hermes v0.23.4 registers for an MCP tool
+// (tools/mcp_tool_schema.py mcp_prefixed_tool_name): mcp__<server>__<tool>,
+// sanitized, and over 64 characters clamped with a hash suffix.
+func HermesToolName(server, tool string) string {
+	full := "mcp__" + hermesNamePart.ReplaceAllString(server, "_") + "__" + hermesNamePart.ReplaceAllString(tool, "_")
+	if len(full) <= 64 {
+		return full
+	}
+	sum := sha256.Sum256([]byte(full))
+	suffix := "_" + hex.EncodeToString(sum[:])[:8]
+	return full[:64-len(suffix)] + suffix
+}
+
+func (c Config) validateTools() error {
+	// Hermes registers the first of two tools with the same name and skips
+	// the rest, so every listed tool must get its own name.
+	owners := map[string]string{}
+	for _, name := range slices.Sorted(maps.Keys(c.MCPServers)) {
+		for _, tool := range c.MCPServers[name].Tools {
+			final, owner := HermesToolName(name, tool), name+"/"+tool
+			if other, ok := owners[final]; ok && other != owner {
+				return fmt.Errorf("mcp_servers tools %s and %s have the same Hermes name %q", other, owner, final)
+			}
+			owners[final] = owner
+		}
+	}
+	for name, server := range c.MCPServers {
+		if !mcpServerName.MatchString(name) {
+			return fmt.Errorf("mcp_servers name %q must match %s", name, mcpServerName)
+		}
+		if ReservedMCPServerName(name) {
+			return fmt.Errorf("mcp_servers name %q is a Hermes toolset name", name)
+		}
+		// Hermes expands ${VAR} in every string of a server entry.
+		if strings.Contains(server.URL, "${") {
+			return fmt.Errorf("mcp_servers %q url must not reference variables", name)
+		}
+		u, err := url.Parse(server.URL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
+			return fmt.Errorf("mcp_servers %q url must be an absolute HTTP(S) URL without credentials or fragment", name)
+		}
+		if len(server.Tools) == 0 {
+			return fmt.Errorf("mcp_servers %q must list its tools", name)
+		}
+		for _, tool := range server.Tools {
+			if strings.TrimSpace(tool) == "" || strings.ContainsAny(tool, "*?[") || strings.Contains(tool, "${") {
+				return fmt.Errorf("mcp_servers %q tool %q must be an exact name", name, tool)
+			}
+		}
+		for header := range server.Headers {
+			if strings.TrimSpace(header) == "" || strings.Contains(header, "${") {
+				return fmt.Errorf("mcp_servers %q has an invalid header name", name)
+			}
+		}
+		for _, value := range server.Headers {
+			if strings.Contains(value, "${") {
+				return fmt.Errorf("mcp_servers %q header values must not reference variables", name)
+			}
+		}
+	}
+	if t := c.ServerTools; t != nil {
+		if t.WebSearchMaxUses < 0 || t.WebSearchMaxUses > 20 || t.WebFetchMaxUses < 0 || t.WebFetchMaxUses > 20 {
+			return fmt.Errorf("server_tools max uses must be between 0 and 20")
+		}
+		if t.WebSearchMaxUses == 0 && t.WebFetchMaxUses == 0 && !t.CodeExecution {
+			return fmt.Errorf("server_tools must select a tool")
+		}
+	}
+	return nil
 }
 
 func (c Config) StartupTimeout() time.Duration {

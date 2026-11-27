@@ -50,13 +50,55 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
 - Token usage per turn. Hermes reports one total for a turn that can span
   several model requests, so the adapter counts tokens and opens no model span.
 
-The compiler rejects tools, skills, plugins, Shared agents, structured output,
-`defaultHeaders`, TLS settings, `tokenPassthrough`, and OpenAI options other
+- RemoteMCPServer tools over Streamable HTTP. Each binding must list its
+  tools; the adapter renders them as `tools.include` and names only the bound
+  servers in `platform_toolsets.api_server`, so no built-in toolset loads.
+  Sampling, elicitation, and the resource and prompt utility tools are off,
+  and Tool Search is off, so each MCP tool is in the request itself. A Secret
+  header or `actorJwt` holds the credential placeholder, and the egress
+  gateway injects the value. The compiler and the runner reject an MCP
+  server named like a Hermes toolset or selector, such as `memory` or
+  `onboarding`, or starting with `mcp-`, Hermes's toolset name for a server.
+- Anthropic server tools from `spec.hermes.serverTools` (`webSearch`,
+  `webFetch` with `maxUses`, and `codeExecution`). They need a ModelConfig
+  with the Anthropic provider. Hermes 0.23.4 builds the Anthropic `tools`
+  list from function tools only, so the adapter writes the plugin
+  `kagent-server-tools` into `$HERMES_HOME/plugins` and enables only it. Its
+  `llm_request` middleware adds the tool entries to each turn request.
+  Hermes keeps the answer text and drops the server tool blocks when it
+  replays history. That edit can invalidate a later thinking block, so the
+  plugin also sets `thinking.block_binding.prefix_mismatch_behavior:
+  drop_block` (beta `thinking-binding-controls-2026-08-01`) on adaptive
+  thinking, and adds adaptive thinking only on models that always think.
+  The web tools are the basic, direct-call versions (`web_search_20250305`,
+  `web_fetch_20250910`). The plugin sets `disable_parallel_tool_use`, so a
+  model step makes at most one tool call, and that setting does not support
+  the 20260209 versions, which call through code execution.
+- MCP entries carry the RemoteMCPServer default 30 s `timeout` and
+  `strict_redirect_headers: true`, which keeps headers on the configured
+  origin and turns off the SSE fallback. A URL, tool name or header value
+  with `${` is rejected: Hermes expands it.
+
+Server tool limits, not handled yet:
+
+- A `pause_turn` stop (Anthropic's server loop reached its limit) maps to
+  `stop`, so the turn ends with the text so far. `maxUses` keeps the loop
+  short.
+- Hermes drops server tool blocks when it replays history. A server call
+  still pending next to an MCP call would then never finish, so the plugin
+  allows one tool call per model step. Completed server blocks are dropped
+  too, which only removes them from history.
+- Each Messages request gets a new code execution container; files do not
+  carry over between model steps.
+
+The compiler rejects sub-agent tools, skills, plugins, Shared agents,
+structured output, `defaultHeaders`, TLS settings, `tokenPassthrough`,
+`requireApproval` (Hermes denies every approval), and OpenAI options other
 than `baseUrl` and `apiFormat: chatCompletions`.
 
 ## Isolation
 
-- `config.yaml` turns off every toolset, memory, and lazy installs, and denies
+- `config.yaml` turns off every built-in toolset, memory, and lazy installs, and denies
   every approval (`unattended_mode: deny`), so a turn never waits on a person.
   The adapter writes it before every gateway start; the compiled configuration
   owns it.
