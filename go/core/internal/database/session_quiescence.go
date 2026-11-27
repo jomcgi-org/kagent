@@ -25,13 +25,21 @@ type SessionQuiescence struct {
 // dispatch, checkpoints, lifecycle operations, or row locks. Already claimed
 // work is excluded: its runtime outcome may be uncertain and cannot be retried
 // by another worker. Suspended/deleted sessions need no automatic runtime work.
+// idleSuspendDue holds a settled turn's runtime until its revision's idle
+// suspend delay passes. A new turn clears quiescence_pending, which restarts
+// the delay at the next settlement. Pending work that is not yet due is not
+// reported, so idle workers wait for the recovery scan instead of polling.
+const idleSuspendDue = `e.created_at <= clock_timestamp() - rr.idle_suspend_delay_ms * interval '1 millisecond'`
+
 func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) {
 	return queryOne(ctx, c.db, `
 		SELECT EXISTS (
 			SELECT 1 FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
+			JOIN runtime_revision rr ON rr.revision = i.prepared_revision
 			WHERE e.published AND e.quiescence_pending = TRUE
 			  AND e.quiescence_executor_id IS NULL
 			  AND i.state = 'RUNTIME_STATE_READY'
+			  AND `+idleSuspendDue+`
 		)
 	`, pgx.RowTo[bool])
 }
@@ -51,7 +59,9 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 		row, err := queryOne(ctx, tx, `
 			SELECT i.id::text AS session_id, e.task_id, e.sequence
 			FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
+			JOIN runtime_revision rr ON rr.revision = i.prepared_revision
 			WHERE e.published AND e.quiescence_pending = TRUE
+			  AND `+idleSuspendDue+`
 			  AND e.quiescence_executor_id IS NULL
 			  AND i.state = 'RUNTIME_STATE_READY'
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'

@@ -3,6 +3,7 @@ package translator
 import (
 	"strings"
 	"testing"
+	"time"
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/stretchr/testify/require"
@@ -153,4 +154,18 @@ func TestRevisionDigestIncludesResources(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEqual(t, before, after)
 	}
+}
+
+func TestRevisionDigestIncludesNonzeroIdleSuspendDelay(t *testing.T) {
+	revision := &Revision{Namespace: "agents", AgentName: "helper"}
+	original, err := revision.Digest()
+	require.NoError(t, err)
+	revision.IdleSuspendDelay = 0
+	unchanged, err := revision.Digest()
+	require.NoError(t, err)
+	require.Equal(t, original, unchanged, "a zero delay keeps existing revision identity")
+	revision.IdleSuspendDelay = 10 * time.Minute
+	delayed, err := revision.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, original, delayed)
 }

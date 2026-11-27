@@ -74,6 +74,8 @@ type RuntimeRevision struct {
 	ActorTemplateName       string
 	ActorTemplateUID        string
 	ActorTemplateSpecDigest string
+	// IdleSuspendDelay delays idle suspension after a turn settles.
+	IdleSuspendDelay time.Duration
 }
 
 // SessionQuery narrows a page of sessions to an optional Agent.
