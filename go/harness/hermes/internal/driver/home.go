@@ -50,6 +50,10 @@ type Settings struct {
 	MCPServers map[string]MCPServer
 	// ServerTools are the Anthropic server tools. Nil adds none.
 	ServerTools *ServerTools
+	// Memory turns on Hermes's built-in memory and its memory tool, with
+	// MemoryCharLimit and UserCharLimit. The adapter syncs the files
+	// (memory.go).
+	Memory bool
 }
 
 // MCPServer is one Streamable HTTP MCP server.
@@ -102,11 +106,30 @@ type agentConfig struct {
 	DisabledToolsets []string `yaml:"disabled_toolsets"`
 }
 
+// memoryConfig is the memory: block. With memory on, nudge_interval 0 turns
+// off Hermes's periodic background memory review: it would save memories
+// from a conversation's untrusted text without the model's turn deciding to.
+// write_approval false keeps a write from waiting on a person.
 type memoryConfig struct {
 	MemoryEnabled      bool   `yaml:"memory_enabled"`
 	UserProfileEnabled bool   `yaml:"user_profile_enabled"`
 	Provider           string `yaml:"provider"`
+	NudgeInterval      *int   `yaml:"nudge_interval,omitempty"`
+	WriteApproval      *bool  `yaml:"write_approval,omitempty"`
+	MemoryCharLimit    int    `yaml:"memory_char_limit,omitempty"`
+	UserCharLimit      int    `yaml:"user_char_limit,omitempty"`
 }
+
+// MemoryToolset is Hermes's built-in memory toolset: the one memory tool.
+const MemoryToolset = "memory"
+
+// MemoryCharLimit and UserCharLimit are Hermes 0.23.4's defaults for
+// MEMORY.md and USER.md, in characters of the §-joined entries. The adapter
+// writes them into config.yaml and keeps a merged file within them.
+const (
+	MemoryCharLimit = 2200
+	UserCharLimit   = 1375
+)
 
 type approvalsConfig struct {
 	Mode            string `yaml:"mode"`
@@ -252,6 +275,17 @@ func RenderConfig(s Settings) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	toolsets, disabled, memory := serverNames, DisabledToolsets, memoryConfig{}
+	if s.Memory {
+		// The memory toolset is the only built-in one the model gets.
+		toolsets = append([]string{MemoryToolset}, serverNames...)
+		disabled = slices.DeleteFunc(slices.Clone(DisabledToolsets), func(name string) bool { return name == MemoryToolset })
+		nudge, approval := 0, false
+		memory = memoryConfig{
+			MemoryEnabled: true, UserProfileEnabled: true, NudgeInterval: &nudge, WriteApproval: &approval,
+			MemoryCharLimit: MemoryCharLimit, UserCharLimit: UserCharLimit,
+		}
+	}
 	plugins := pluginsConfig{Enabled: []string{}}
 	if s.ServerTools != nil {
 		if _, err := serverToolsJSON(*s.ServerTools); err != nil {
@@ -268,9 +302,9 @@ func RenderConfig(s Settings) ([]byte, error) {
 		// toolset and only those servers; an empty one enables nothing
 		// (hermes_cli/tools_config.py _get_platform_tools at v0.23.4).
 		Toolsets:         []string{},
-		PlatformToolsets: map[string][]string{"api_server": serverNames},
-		Agent:            agentConfig{DisabledToolsets: DisabledToolsets},
-		Memory:           memoryConfig{},
+		PlatformToolsets: map[string][]string{"api_server": toolsets},
+		Agent:            agentConfig{DisabledToolsets: disabled},
+		Memory:           memory,
 		// api_server sessions are unattended: unattended_mode deny refuses a
 		// flagged action at once instead of parking the turn, so a turn never
 		// waits on a person.

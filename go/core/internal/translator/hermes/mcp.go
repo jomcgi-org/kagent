@@ -19,7 +19,10 @@ import (
 
 type mcpCompilation struct {
 	servers map[string]hermesconfig.MCPServer
-	egress  []string
+	// names maps each bound RemoteMCPServer, as namespace/name, to its
+	// Hermes server name.
+	names  map[string]string
+	egress []string
 }
 
 // compileMCP renders each RemoteMCPServer binding as a Hermes mcp_servers
@@ -30,7 +33,7 @@ func (c *Compiler) compileMCP(namespace string, tools []translator.ResolvedMCPTo
 	if len(tools) == 0 {
 		return mcpCompilation{}, nil
 	}
-	result := mcpCompilation{servers: make(map[string]hermesconfig.MCPServer, len(tools))}
+	result := mcpCompilation{servers: make(map[string]hermesconfig.MCPServer, len(tools)), names: make(map[string]string, len(tools))}
 	for _, tool := range tools {
 		server := tool.Server
 		if server == nil {
@@ -75,6 +78,7 @@ func (c *Compiler) compileMCP(namespace string, tools []translator.ResolvedMCPTo
 		selected := slices.Clone(tool.Binding.Tools)
 		slices.Sort(selected)
 		result.servers[name] = hermesconfig.MCPServer{URL: server.Spec.URL, Headers: headers, Tools: slices.Compact(selected)}
+		result.names[server.Namespace+"/"+server.Name] = name
 		result.egress = append(result.egress, egress.Origin(parsed))
 	}
 	return result, nil
@@ -145,4 +149,23 @@ func compileServerTools(tools *v1alpha3.HermesServerTools, provider v1alpha3.Mod
 		return nil, translator.NewValidationError("Hermes serverTools must select a tool")
 	}
 	return result, nil
+}
+
+// compileMemory maps spec.hermes.memory to the Hermes name of its bound
+// RemoteMCPServer. The adapter calls memory_read and memory_write through the
+// binding's URL and headers, so the binding's egress and credential cover
+// them; the binding must not give those tools to the model.
+func compileMemory(memory *v1alpha3.HermesMemory, namespace string, mcp mcpCompilation) (string, error) {
+	if memory == nil {
+		return "", nil
+	}
+	name, ok := mcp.names[namespace+"/"+memory.RemoteMCPServer]
+	if !ok {
+		return "", translator.NewValidationError("Hermes memory RemoteMCPServer %q is not bound to the agent", memory.RemoteMCPServer)
+	}
+	tools := mcp.servers[name].Tools
+	if slices.Contains(tools, hermesconfig.MemoryReadTool) || slices.Contains(tools, hermesconfig.MemoryWriteTool) {
+		return "", translator.NewValidationError("Hermes memory RemoteMCPServer %q binding must not list %s or %s", memory.RemoteMCPServer, hermesconfig.MemoryReadTool, hermesconfig.MemoryWriteTool)
+	}
+	return name, nil
 }

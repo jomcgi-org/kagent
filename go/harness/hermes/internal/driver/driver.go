@@ -40,6 +40,9 @@ type Config struct {
 	TurnTimeout    time.Duration
 	StopGrace      time.Duration
 	MaxBytes       int
+	// Memory, when set, syncs Hermes's memory files with an MCP server
+	// before and after each turn. Settings.Memory must be on.
+	Memory *MemorySync
 	// Output receives the gateway's stdout and stderr. Nil means os.Stderr.
 	Output io.Writer
 }
@@ -53,6 +56,7 @@ type Driver struct {
 	mu      sync.Mutex
 	key     string
 	gateway *gateway
+	memory  *memorySyncer
 }
 
 // New returns a driver. The gateway starts on Start or on the first turn.
@@ -70,7 +74,14 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Hermes API server key: %w", err)
 	}
-	return &Driver{cfg: cfg, http: &http.Client{Timeout: cfg.TurnTimeout}, now: time.Now, key: key}, nil
+	d := &Driver{cfg: cfg, http: &http.Client{Timeout: cfg.TurnTimeout}, now: time.Now, key: key}
+	if (cfg.Memory != nil) != cfg.Settings.Memory {
+		return nil, fmt.Errorf("hermes memory needs both its settings and its sync server")
+	}
+	if cfg.Memory != nil {
+		d.memory = newMemorySyncer(*cfg.Memory, cfg.Home)
+	}
+	return d, nil
 }
 
 // Validate checks that the gateway executable exists.
@@ -166,6 +177,13 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 	var idempotencyKey string
 	if turn.TaskID != "" {
 		idempotencyKey = "kagent-task-" + turn.TaskID
+	}
+	if d.memory != nil {
+		// Load the vault's copy, which a new Hermes session puts in its
+		// prompt, or write back a change a failed sync left behind. Then
+		// write back what this turn changed.
+		d.memory.Sync(ctx, false)
+		defer d.memory.Sync(ctx, true)
 	}
 	start := d.now()
 	result, err := c.respond(ctx, request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt})

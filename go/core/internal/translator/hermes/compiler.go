@@ -104,6 +104,9 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		cfg.CompressionModel = strings.TrimSpace(compression.Model)
 	}
 	cfg.MCPServers, cfg.ServerTools = mcp.servers, serverTools
+	if cfg.MemorySync, err = compileMemory(harness.Spec.Hermes.Memory, template.Namespace, mcp); err != nil {
+		return nil, err
+	}
 	cfg.RuntimeTelemetry = telemetryConfig.RuntimeTelemetry(tracing.RuntimeHermes, input.AgentName, template.Namespace, model.Spec)
 	cfg.ControlPlaneURL = c.settings.GetControlPlaneUrl()
 	cfg.MaxContentLength = c.settings.MaxContentLength // Preserve unset versus unlimited.

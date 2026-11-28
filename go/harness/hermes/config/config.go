@@ -91,6 +91,10 @@ type Config struct {
 	// ServerTools are the Anthropic server tools added to each Messages API
 	// request of a turn. Nil adds none.
 	ServerTools *ServerTools `json:"server_tools,omitempty"`
+	// MemorySync names the MCPServers entry whose memory_read and
+	// memory_write tools hold Hermes's MEMORY.md and USER.md. Empty keeps
+	// Hermes memory off.
+	MemorySync string `json:"memory_sync,omitempty"`
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy. It is absent for standalone runs.
 	RuntimeTelemetry     tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
@@ -117,6 +121,13 @@ type ServerTools struct {
 	WebFetchMaxUses  int  `json:"web_fetch_max_uses,omitempty"`
 	CodeExecution    bool `json:"code_execution,omitempty"`
 }
+
+// MemoryReadTool and MemoryWriteTool are the MCP tools the adapter calls to
+// sync Hermes's memory files. The model never gets them.
+const (
+	MemoryReadTool  = "memory_read"
+	MemoryWriteTool = "memory_write"
+)
 
 // mcpServerName matches the names Hermes prefixes onto tool names. Kagent's
 // runtime names use only these characters.
@@ -309,6 +320,15 @@ func (c Config) validateTools() error {
 			if strings.Contains(value, "${") {
 				return fmt.Errorf("mcp_servers %q header values must not reference variables", name)
 			}
+		}
+	}
+	if c.MemorySync != "" {
+		server, ok := c.MCPServers[c.MemorySync]
+		if !ok {
+			return fmt.Errorf("memory_sync %q must name an mcp_servers entry", c.MemorySync)
+		}
+		if slices.Contains(server.Tools, MemoryReadTool) || slices.Contains(server.Tools, MemoryWriteTool) {
+			return fmt.Errorf("mcp_servers %q must not list %s or %s: they are for the adapter's memory sync", c.MemorySync, MemoryReadTool, MemoryWriteTool)
 		}
 	}
 	if t := c.ServerTools; t != nil {

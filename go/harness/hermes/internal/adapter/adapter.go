@@ -32,6 +32,11 @@ func New(_ context.Context, input Input) (*driver.Driver, error) {
 	if !filepath.IsAbs(input.DurableDir) {
 		return nil, fmt.Errorf("durable directory must be an absolute path")
 	}
+	var memory *driver.MemorySync
+	if cfg.MemorySync != "" {
+		server := cfg.MCPServers[cfg.MemorySync]
+		memory = &driver.MemorySync{URL: server.URL, Headers: server.Headers}
+	}
 	// The driver writes HERMES_HOME before each gateway start, not here: a
 	// snapshot restore can replace /data after this runs.
 	return driver.New(driver.Config{
@@ -42,7 +47,9 @@ func New(_ context.Context, input Input) (*driver.Driver, error) {
 			CompressionThresholdTokens: cfg.CompressionThresholdTokens, CompressionMinTailUserMessages: cfg.CompressionMinTailUserMessages,
 			CompressionModel: cfg.CompressionModel,
 			MCPServers:       mcpServers(cfg.MCPServers), ServerTools: serverTools(cfg.ServerTools),
+			Memory: memory != nil,
 		},
+		Memory:       memory,
 		Instructions: cfg.Instructions, Model: cfg.Model, Provider: cfg.RuntimeTelemetry.Provider,
 		Environment: input.Environment, StartupTimeout: cfg.StartupTimeout(), TurnTimeout: cfg.TurnTimeout(),
 		StopGrace: cfg.StopGrace(), MaxBytes: cfg.MaxResponseBytes, Output: input.Output,
