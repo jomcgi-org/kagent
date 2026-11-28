@@ -74,6 +74,15 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   `web_fetch_20250910`). The plugin sets `disable_parallel_tool_use`, so a
   model step makes at most one tool call, and that setting does not support
   the 20260209 versions, which call through code execution.
+- Hermes's built-in memory, `MEMORY.md` and `USER.md`, from
+  `spec.hermes.memory.remoteMCPServer`: a RemoteMCPServer bound to the
+  agent whose `memory_read {file}` returns `{file, content, version}` and
+  whose `memory_write {file, content, base_version}` replaces a file only
+  from its current version, else returns `{conflict: true, content,
+  version}`. The server must be stateless and answer `application/json`.
+  The binding must not list either tool, so the model gets only Hermes's
+  `memory` tool. The adapter calls them with the binding's URL and headers,
+  so the egress gateway injects the binding's credential. See "Memory sync".
 - MCP entries carry the RemoteMCPServer default 30 s `timeout` and
   `strict_redirect_headers: true`, which keeps headers on the configured
   origin and turns off the SSE fallback. A URL, tool name or header value
@@ -100,6 +109,9 @@ than `baseUrl` and `apiFormat: chatCompletions`.
 
 - `config.yaml` turns off every built-in toolset, memory, and lazy installs, and denies
   every approval (`unattended_mode: deny`), so a turn never waits on a person.
+  With `spec.hermes.memory`, the `memory` toolset is the one built-in toolset
+  on, and `nudge_interval: 0` turns off Hermes's background memory review,
+  which would save memories without the turn's model call deciding to.
   The adapter writes it before every gateway start; the compiled configuration
   owns it.
 - Before every gateway start the adapter removes `$HERMES_HOME/.env`, which
@@ -129,6 +141,30 @@ it wrote at start. If the gateway exited, `HERMES_HOME` was replaced, or
 `/health` fails, the adapter stops it, rewrites `HERMES_HOME`, and starts a
 new one. A turn that hits the client timeout also stops the gateway, so the
 next turn gets a new one.
+
+## Memory sync
+
+```text
+before each turn, for MEMORY.md and USER.md:
+  local file unchanged since the last sync -> memory_read -> local file
+  local file changed (a failed write-back)  -> write back, as below
+turn: Hermes reads memories/ into its prompt; its memory tool edits them
+after each turn, for a changed file:
+  memory_write(content, base_version) -> ok: record the new version
+  conflict -> apply this session's entry adds and removes (against the
+              last synced copy) to the newer copy, retry, at most 3 times
+```
+
+- Entries are split on Hermes's `\n§\n` delimiter. A replaced entry is a
+  removal and an addition, inserted after the nearest earlier entry the newer
+  copy still holds. A merged file over Hermes's limit (2200 characters for
+  `MEMORY.md`, 1375 for `USER.md`) keeps the newer copy and logs.
+- A failed call logs and never fails the turn: the local copy stays, and the
+  next turn writes it back. `$HERMES_HOME/kagent-memory-sync.json` records the
+  last synced copy and version, so a new process on the same volume still
+  merges. A missing file starts empty.
+- The adapter takes Hermes's lock (`<file>.lock`) while it reads or replaces
+  a file.
 
 ## Limits
 

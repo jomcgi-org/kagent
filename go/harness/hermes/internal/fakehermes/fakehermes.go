@@ -141,7 +141,27 @@ func serve() error {
 			_, _ = w.Write([]byte(`{"error":{"message":"invalid API key"}}`))
 			return
 		}
+		// Like Hermes's memory tool, "remember <entry>" adds an entry to
+		// MEMORY.md; "recall" answers with what MEMORY.md holds.
+		memory := filepath.Join(home, "memories", "MEMORY.md")
+		if entry, ok := strings.CutPrefix(body.Input, "remember "); ok {
+			raw, _ := os.ReadFile(memory)
+			text := entry
+			if len(raw) > 0 {
+				text = string(raw) + "\n§\n" + entry
+			}
+			if err := os.WriteFile(memory, []byte(text), 0o600); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeResponse(w, "completed", "saved", "")
+			return
+		}
 		switch body.Input {
+		case "recall":
+			raw, _ := os.ReadFile(memory)
+			writeResponse(w, "completed", "memory: "+string(raw), "")
+			return
 		case "exit":
 			os.Exit(3)
 		case "slow":

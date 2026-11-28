@@ -158,3 +158,47 @@ func TestCompileMCPRejectsServersWithOneHermesName(t *testing.T) {
 		t.Fatalf("Compile() error = %v", err)
 	}
 }
+
+func TestCompileMemorySyncsThroughTheBoundServer(t *testing.T) {
+	input, collections := testInput(t, v1alpha3.ModelConfigSpec{
+		Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-opus-5-5", APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+	}, map[string][]byte{"api-key": []byte(credentialValue)})
+	notes := mcpServer("notes", "http://bosun-artifacts.test.svc.cluster.local:8080/notes/mcp")
+	notes.Spec.ActorJWT = &v1alpha3.ActorJWT{Audiences: []string{"bosun-artifacts"}}
+	bindMCP(input, notes, "notes_read")
+	input.Harness.Spec.Hermes.Memory = &v1alpha3.HermesMemory{RemoteMCPServer: "notes"}
+	compiler := NewCompiler(krt.TestingDummyContext{}, collections, testRuntimeDefaults())
+	result, err := compiler.Compile(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := hermesconfig.Parse(result.ConfigJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := cfg.MCPServers[cfg.MemorySync]
+	if cfg.MemorySync != "notes" || server.Headers["Authorization"] != "Bearer "+translator.CredentialPlaceholder || strings.Join(server.Tools, ",") != "notes_read" {
+		t.Fatalf("memory sync = %q, server = %#v", cfg.MemorySync, server)
+	}
+	// The adapter's own calls use the binding's origin, so its actor JWT
+	// binding covers them.
+	var origins []string
+	for _, credential := range result.Credentials {
+		if credential.ActorJWT != nil {
+			origins = append(origins, credential.Origin+" "+credential.Header)
+		}
+	}
+	if strings.Join(origins, ",") != "http://bosun-artifacts.test.svc.cluster.local:8080 authorization" {
+		t.Fatalf("actor JWT credentials = %v", origins)
+	}
+
+	input.Harness.Spec.Hermes.Memory = &v1alpha3.HermesMemory{RemoteMCPServer: "absent"}
+	if _, err := compiler.Compile(context.Background(), input); err == nil || !strings.Contains(err.Error(), "not bound to the agent") {
+		t.Fatalf("unbound memory server error = %v", err)
+	}
+	input.Harness.Spec.Hermes.Memory = &v1alpha3.HermesMemory{RemoteMCPServer: "notes"}
+	input.Root.MCPTools[0].Binding.Tools = []string{"notes_read", "memory_read"}
+	if _, err := compiler.Compile(context.Background(), input); err == nil || !strings.Contains(err.Error(), "must not list memory_read") {
+		t.Fatalf("model memory tools error = %v", err)
+	}
+}

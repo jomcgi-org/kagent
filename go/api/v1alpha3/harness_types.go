@@ -120,6 +120,25 @@ type HermesHarness struct {
 	// target. It requires a ModelConfig with the Anthropic provider.
 	// +optional
 	ServerTools *HermesServerTools `json:"serverTools,omitempty"`
+
+	// Memory turns on Hermes's built-in memory, MEMORY.md and USER.md, and
+	// keeps both files in an MCP server instead of only on the Actor's
+	// volume. The model gets Hermes's memory tool. Unset keeps memory off.
+	// +optional
+	Memory *HermesMemory `json:"memory,omitempty"`
+}
+
+// HermesMemory names where Hermes's memory files live.
+type HermesMemory struct {
+	// RemoteMCPServer names a RemoteMCPServer bound to the agent. The adapter
+	// reads each file with its memory_read tool before a turn and writes a
+	// changed file back with memory_write after it, through the same egress
+	// credential as the binding. The binding must not list memory_read or
+	// memory_write, so the model cannot call them.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +required
+	RemoteMCPServer string `json:"remoteMCPServer"`
 }
 
 // HermesServerTools selects Anthropic server tools. Each unset field leaves
