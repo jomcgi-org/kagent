@@ -25,9 +25,20 @@ const SessionKeyHeader = "X-Hermes-Session-Key"
 // with it (agent/conversation_loop.py: "content_policy_blocked: <detail>").
 const ReasonContentPolicyBlocked = "content_policy_blocked"
 
+// ReasonInsufficientCredits is the failure reason for a turn the provider
+// refused for an empty prepaid balance: HTTP 402. Hermes 0.23.4 classifies a
+// 402 as billing and fails the turn with its error summary, which starts
+// with the status (agent/api_error_summary.py: "HTTP 402: <message>"). A 429
+// is a rate limit that Hermes retries; it is not this reason.
+const ReasonInsufficientCredits = "insufficient_credits"
+
 // publicReasons are the Hermes failure reasons a TurnError may publish. Each
 // is a fixed code; the provider text after it is never published.
 var publicReasons = []string{ReasonContentPolicyBlocked}
+
+// statusReasons map the HTTP status that starts a Hermes error summary to
+// the reason a TurnError publishes for it.
+var statusReasons = map[string]string{"HTTP 402:": ReasonInsufficientCredits}
 
 // TurnError is a Hermes turn that ended without a usable answer. Its status
 // and an allowlisted reason code are safe to publish; Detail comes from
@@ -41,6 +52,11 @@ type TurnError struct {
 func (e *TurnError) Reason() string {
 	for _, reason := range publicReasons {
 		if rest, ok := strings.CutPrefix(e.Detail, reason); ok && (rest == "" || rest[0] == ':') {
+			return reason
+		}
+	}
+	for prefix, reason := range statusReasons {
+		if strings.HasPrefix(e.Detail, prefix) {
 			return reason
 		}
 	}

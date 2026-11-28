@@ -302,12 +302,21 @@ func TestTurnErrorPublishesOnlyAllowlistedReasons(t *testing.T) {
 		"content_policy_blockedness: x":                "",
 		"context_overflow: too long":                   "",
 		"provider said content_policy_blocked: nested": "",
-		"": "",
+		// An empty prepaid balance (402) is published; its text is not.
+		"HTTP 402: Insufficient credits. Top up in the console": ReasonInsufficientCredits,
+		// A rate limit, another status or a 402 inside the text is not.
+		"HTTP 429: Rate limit exceeded.": "",
+		"HTTP 4020: odd":                 "",
+		"upstream said HTTP 402: nested": "",
+		"HTTP 403: Key lacks permission": "",
+		"":                               "",
 	} {
 		turnErr := &TurnError{Status: "failed", Detail: detail}
 		require.Equal(t, want, turnErr.Reason(), detail)
 		require.NotContains(t, turnErr.Public(), "Cyber", detail)
+		require.NotContains(t, turnErr.Public(), "Top up", detail)
 	}
+	require.Equal(t, "Hermes turn failed: insufficient_credits", (&TurnError{Status: "failed", Detail: "HTTP 402: no credits"}).Public())
 	// Only a failed turn carries a reason.
 	require.Equal(t, "Hermes turn was cancelled", (&TurnError{Status: "cancelled", Detail: "content_policy_blocked: x"}).Public())
 }

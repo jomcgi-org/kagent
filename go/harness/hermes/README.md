@@ -39,8 +39,12 @@ private A2A (gRPC) -> runtime/a2a executor -> driver.Run
 
 A failed task's message is fixed text. Only an allowlisted Hermes reason
 code joins it, never the provider's text:
-`Hermes turn failed: content_policy_blocked` for a turn that the provider's
-safety filter refused.
+
+- `Hermes turn failed: content_policy_blocked` for a turn that the
+  provider's safety filter refused.
+- `Hermes turn failed: insufficient_credits` for a turn that the provider
+  refused with HTTP 402, an empty prepaid balance. Hermes starts that error
+  with `HTTP 402:`. A 429 rate limit gets no reason.
 
 ## Implemented support
 
