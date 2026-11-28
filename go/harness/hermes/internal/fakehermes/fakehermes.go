@@ -34,6 +34,7 @@ type Request struct {
 	Input          string `json:"input"`
 	Instructions   string `json:"instructions"`
 	Conversation   string `json:"conversation"`
+	Previous       string `json:"previous_response_id"`
 	Store          bool   `json:"store"`
 }
 
@@ -106,13 +107,35 @@ func serve() error {
 		return err == nil && os.SameFile(heldInfo, current)
 	}
 	var mu sync.Mutex
+	storePath := filepath.Join(home, "fake-store.json")
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ok"}`)) })
+	mux.HandleFunc("DELETE /v1/responses/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+key {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		st := loadStore(storePath)
+		id := r.PathValue("id")
+		if _, ok := st.Responses[id]; !ok {
+			http.Error(w, `{"error":{"message":"Response not found"}}`, http.StatusNotFound)
+			return
+		}
+		st.forget(id)
+		if err := st.save(storePath); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"id":%q,"object":"response","deleted":true}`, id)
+	})
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Input        string `json:"input"`
 			Instructions string `json:"instructions"`
 			Conversation string `json:"conversation"`
+			Previous     string `json:"previous_response_id"`
 			Store        bool   `json:"store"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -122,7 +145,7 @@ func serve() error {
 		recorded := Request{
 			Authorization: r.Header.Get("Authorization"), SessionKey: r.Header.Get("X-Hermes-Session-Key"),
 			IdempotencyKey: r.Header.Get("Idempotency-Key"), Input: body.Input, Instructions: body.Instructions,
-			Conversation: body.Conversation, Store: body.Store,
+			Conversation: body.Conversation, Previous: body.Previous, Store: body.Store,
 		}
 		line, _ := json.Marshal(recorded)
 		mu.Lock()
@@ -132,6 +155,15 @@ func serve() error {
 			_ = f.Close()
 		}
 		mu.Unlock()
+		if body.Input == "slow" {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(30 * time.Second):
+			}
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
 		if !backed() {
 			http.Error(w, `{"error":{"message":"attempt to write a readonly database"}}`, http.StatusInternalServerError)
 			return
@@ -141,54 +173,180 @@ func serve() error {
 			_, _ = w.Write([]byte(`{"error":{"message":"invalid API key"}}`))
 			return
 		}
-		// Like Hermes's memory tool, "remember <entry>" adds an entry to
-		// MEMORY.md; "recall" answers with what MEMORY.md holds.
-		memory := filepath.Join(home, "memories", "MEMORY.md")
-		if entry, ok := strings.CutPrefix(body.Input, "remember "); ok {
-			raw, _ := os.ReadFile(memory)
-			text := entry
-			if len(raw) > 0 {
-				text = string(raw) + "\n§\n" + entry
-			}
-			if err := os.WriteFile(memory, []byte(text), 0o600); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+		if body.Conversation != "" && body.Previous != "" {
+			http.Error(w, `{"error":{"message":"Cannot use both 'conversation' and 'previous_response_id'"}}`, http.StatusBadRequest)
+			return
+		}
+		// Like Hermes's response store: an exact retry of an idempotency key
+		// replays its first result, and another body under it conflicts.
+		st := loadStore(storePath)
+		fingerprint := body.Input + "\x00" + body.Conversation + "\x00" + body.Previous
+		if seen, ok := st.Keys[recorded.IdempotencyKey]; ok && recorded.IdempotencyKey != "" {
+			if seen.Fingerprint != fingerprint {
+				http.Error(w, `{"error":{"message":"admission_conflict"}}`, http.StatusConflict)
 				return
 			}
-			writeResponse(w, "completed", "saved", "")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(seen.Body))
 			return
 		}
-		switch body.Input {
-		case "recall":
-			raw, _ := os.ReadFile(memory)
-			writeResponse(w, "completed", "memory: "+string(raw), "")
-			return
-		case "exit":
-			os.Exit(3)
-		case "slow":
-			select {
-			case <-r.Context().Done():
-			case <-time.After(30 * time.Second):
+		var history []string
+		switch {
+		case body.Previous != "":
+			stored, ok := st.Responses[body.Previous]
+			if !ok {
+				http.Error(w, `{"error":{"message":"Previous response not found"}}`, http.StatusNotFound)
+				return
 			}
-			return
-		case "fail":
-			writeResponse(w, "failed", "", `,"error":{"message":"provider said no"}`)
-			return
-		case "pending":
-			writeResponse(w, "in_progress", "", "")
+			history = stored
+		case body.Conversation != "":
+			history = st.Responses[st.Conversations[body.Conversation]]
+		}
+		status, text, extra := answer(home, history, body.Input)
+		if status == "exit" {
+			os.Exit(3)
+		}
+		// Like Hermes, store the turn whatever its outcome, and move the
+		// conversation name to it.
+		st.Next++
+		id := fmt.Sprintf("resp_%d", st.Next)
+		st.Responses[id] = append(append([]string{}, history...), body.Input)
+		if body.Conversation != "" {
+			st.Conversations[body.Conversation] = id
+		}
+		out := responseBody(id, status, text, extra)
+		if recorded.IdempotencyKey != "" {
+			st.Keys[recorded.IdempotencyKey] = replay{Fingerprint: fingerprint, Body: out, Response: id}
+		}
+		if err := st.save(storePath); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeResponse(w, "completed", "echo: "+body.Input, "")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(out))
 	})
 	return http.ListenAndServe("127.0.0.1:"+os.Getenv("API_SERVER_PORT"), mux)
 }
 
-func writeResponse(w http.ResponseWriter, status, text, extra string) {
+// answer runs the fake agent. An empty status writes nothing.
+func answer(home string, history []string, input string) (status, text, extra string) {
+	// Like a provider safety filter, which judges the whole transcript: a
+	// blocked message anywhere in it refuses the turn.
+	for _, message := range append(append([]string{}, history...), input) {
+		if strings.Contains(message, "blocked") {
+			return "failed", "", `,"error":{"message":"content_policy_blocked: Cyber safeguards flagged this message"}`
+		}
+	}
+	// Like Hermes's memory tool, "remember <entry>" adds an entry to
+	// MEMORY.md; "recall" answers with what MEMORY.md holds.
+	memory := filepath.Join(home, "memories", "MEMORY.md")
+	if entry, ok := strings.CutPrefix(input, "remember "); ok {
+		raw, _ := os.ReadFile(memory)
+		text := entry
+		if len(raw) > 0 {
+			text = string(raw) + "\n§\n" + entry
+		}
+		if err := os.WriteFile(memory, []byte(text), 0o600); err != nil {
+			return "failed", "", `,"error":{"message":"write memory"}`
+		}
+		return "completed", "saved", ""
+	}
+	switch input {
+	case "recall":
+		raw, _ := os.ReadFile(memory)
+		return "completed", "memory: " + string(raw), ""
+	case "history":
+		// The transcript the turn continued, so a test can see the chain.
+		return "completed", "history: " + strings.Join(history, "|"), ""
+	case "exit":
+		return "exit", "", ""
+	case "fail":
+		return "failed", "", `,"error":{"message":"provider said no"}`
+	case "pending":
+		return "in_progress", "", ""
+	}
+	return "completed", "echo: " + input, ""
+}
+
+type replay struct {
+	Fingerprint string
+	Body        string
+	Response    string
+}
+
+// store is the fake's response store. It lives in a file, so a new gateway
+// process on the same HERMES_HOME keeps it.
+type store struct {
+	Next          int
+	Responses     map[string][]string
+	Conversations map[string]string
+	Keys          map[string]replay
+}
+
+func loadStore(path string) *store {
+	st := &store{}
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, st)
+	}
+	if st.Responses == nil {
+		st.Responses = map[string][]string{}
+	}
+	if st.Conversations == nil {
+		st.Conversations = map[string]string{}
+	}
+	if st.Keys == nil {
+		st.Keys = map[string]replay{}
+	}
+	return st
+}
+
+func (st *store) save(path string) error {
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o600)
+}
+
+// forget deletes a response like Hermes's DELETE: the conversation names
+// that point at it and its idempotency record go too.
+func (st *store) forget(id string) {
+	delete(st.Responses, id)
+	for name, target := range st.Conversations {
+		if target == id {
+			delete(st.Conversations, name)
+		}
+	}
+	for k, seen := range st.Keys {
+		if seen.Response == id {
+			delete(st.Keys, k)
+		}
+	}
+}
+
+// StoredResponses reads the response transcripts the fake stored under home.
+func StoredResponses(home string) map[string][]string {
+	return loadStore(filepath.Join(home, "fake-store.json")).Responses
+}
+
+// SeedConversation stores a response holding history and points the
+// conversation name at it, like a session from an earlier adapter.
+func SeedConversation(home, conversation string, history []string) error {
+	path := filepath.Join(home, "fake-store.json")
+	st := loadStore(path)
+	st.Next++
+	id := fmt.Sprintf("resp_%d", st.Next)
+	st.Responses[id] = history
+	st.Conversations[conversation] = id
+	return st.save(path)
+}
+
+func responseBody(id, status, text, extra string) string {
 	output := "[]"
 	if text != "" {
 		encoded, _ := json.Marshal(text)
 		output = `[{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"thinking"}]},` +
 			`{"type":"message","role":"assistant","content":[{"type":"output_text","text":` + string(encoded) + `}]}]`
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = fmt.Fprintf(w, `{"id":"resp_1","object":"response","status":%q,"model":"hermes-agent","output":%s,"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}%s}`, status, output, extra)
+	return fmt.Sprintf(`{"id":%q,"object":"response","status":%q,"model":"hermes-agent","output":%s,"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}%s}`, id, status, output, extra)
 }

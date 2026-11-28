@@ -185,8 +185,28 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		d.memory.Sync(ctx, false)
 		defer d.memory.Sync(ctx, true)
 	}
+	head, err := loadChainHead(d.cfg.Home, sessionKey)
+	if err != nil {
+		// Without a head the turn continues by conversation name, which
+		// Hermes moved only on turns sent by name. That loses context but
+		// never stops the session.
+		logging.FromContext(ctx).WarnContext(ctx, "Hermes chain head is unreadable; continuing the conversation by name", "error", err)
+		head = nil
+	}
+	base := head.base(turn.TaskID)
 	start := d.now()
-	result, err := c.respond(ctx, request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt, Images: turn.Images})
+	req := request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt, Images: turn.Images, PreviousResponseID: base}
+	result, err := c.respond(ctx, req)
+	if errors.Is(err, errPreviousNotFound) {
+		// The response store evicted the head. Continue by conversation name,
+		// under another idempotency key: the request body differs.
+		logging.FromContext(ctx).WarnContext(ctx, "Hermes no longer holds the chain head; continuing the conversation by name", "response", base)
+		base, req.PreviousResponseID = "", ""
+		if req.IdempotencyKey != "" {
+			req.IdempotencyKey += "-conversation"
+		}
+		result, err = c.respond(ctx, req)
+	}
 	if result.Usage != nil {
 		// Hermes reports one total for the turn, which can span several model
 		// requests, so the total counts tokens and opens no model span.
@@ -210,9 +230,24 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		var turnErr *TurnError
 		if errors.As(err, &turnErr) {
 			logging.FromContext(ctx).WarnContext(ctx, "Hermes turn did not answer", "status", turnErr.Status, "error", turnErr)
+			if turnErr.Reason() == ReasonContentPolicyBlocked && result.ID != "" {
+				// The chain head stays on the last answered turn, so the refused
+				// message never reaches a later request. Deleting the stored
+				// turn also drops the conversation name that points at it.
+				if err := c.forget(ctx, result.ID); err != nil {
+					logging.FromContext(ctx).WarnContext(ctx, "Could not delete the refused Hermes turn", "response", result.ID, "error", err)
+				}
+			}
 			return runtime.Outcome{Failure: &runtime.Failure{Message: turnErr.Public()}}, nil
 		}
 		return runtime.Outcome{}, err
+	}
+	if result.ID != "" {
+		if err := saveChainHead(d.cfg.Home, sessionKey, chainHead{ResponseID: result.ID, TaskID: turn.TaskID, Base: base}); err != nil {
+			// The next turn chains to the older head, so the model does not
+			// see this turn. The answer is still delivered.
+			logging.FromContext(ctx).WarnContext(ctx, "Could not record the Hermes chain head", "error", err)
+		}
 	}
 	if err := sink.TextDelta(runtime.TextDelta{Text: result.Text}); err != nil {
 		return runtime.Outcome{}, err
