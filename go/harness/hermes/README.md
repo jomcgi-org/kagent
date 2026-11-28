@@ -152,7 +152,7 @@ which drops a `conversation` name that points at it.
 - A session with no head (its first turn, or a session from an older
   adapter) continues by `conversation` name.
 - A retry of the task that moved the head sends that turn's request again,
-  so Hermes replays the first answer.
+  under the same idempotency key, so Hermes replays the first answer.
 - If the response store no longer holds the head, the turn continues by
   `conversation` name under the idempotency key `kagent-task-<task
   ID>-conversation`.

@@ -28,12 +28,15 @@ const chainDir = "kagent-chain"
 type chainHead struct {
 	// ResponseID is the stored Hermes response of the answered turn.
 	ResponseID string `json:"responseID"`
-	// TaskID is the turn's task. A retry of that task sends Base again, so
-	// Hermes sees the same request and replays its first result.
+	// TaskID is the turn's task. A retry of that task sends Base under
+	// IdempotencyKey again, so Hermes sees the same request and replays its
+	// first result.
 	TaskID string `json:"taskID,omitempty"`
 	// Base is the response the turn chained to; empty means the
 	// conversation name.
 	Base string `json:"base,omitempty"`
+	// IdempotencyKey is the key the answered request used.
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 }
 
 func chainPath(home, sessionKey string) string {
@@ -72,14 +75,11 @@ func saveChainHead(home, sessionKey string, head chainHead) error {
 	return nil
 }
 
-// base returns the response a turn of taskID chains to, or "" for the
-// conversation name.
-func (h *chainHead) base(taskID string) string {
-	if h == nil {
-		return ""
+// retry returns the answered request when taskID is the task that moved the
+// head.
+func (h *chainHead) retry(taskID string) (base, idempotencyKey string, ok bool) {
+	if h == nil || taskID == "" || h.TaskID != taskID {
+		return "", "", false
 	}
-	if taskID != "" && h.TaskID == taskID {
-		return h.Base
-	}
-	return h.ResponseID
+	return h.Base, h.IdempotencyKey, true
 }

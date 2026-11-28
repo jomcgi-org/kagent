@@ -513,7 +513,19 @@ func TestRunContinuesByNameWhenTheHeadIsGone(t *testing.T) {
 	require.Equal(t, "kagent-task-t1-conversation", requests[1].IdempotencyKey)
 	head, err := loadChainHead(home, "kagent-fixed")
 	require.NoError(t, err)
-	require.Equal(t, &chainHead{ResponseID: "resp_1", TaskID: "t1"}, head)
+	require.Equal(t, &chainHead{ResponseID: "resp_1", TaskID: "t1", IdempotencyKey: "kagent-task-t1-conversation"}, head)
+
+	// A retry of that task resends the fallback request, so Hermes replays
+	// it and does not run the turn twice.
+	sink = &recordingSink{}
+	_, err = d.Run(t.Context(), runtime.Turn{TaskID: "t1", Prompt: "hello", ContinuationID: "kagent-fixed"}, sink)
+	require.NoError(t, err)
+	require.Equal(t, "echo: hello", sink.text.String())
+	requests, err = fakehermes.Requests(home)
+	require.NoError(t, err)
+	require.Len(t, requests, 3)
+	require.Equal(t, requests[1], requests[2])
+	require.Len(t, fakehermes.StoredResponses(home), 1, "the retry must not run the turn again")
 }
 
 func TestRunReportsCancellation(t *testing.T) {

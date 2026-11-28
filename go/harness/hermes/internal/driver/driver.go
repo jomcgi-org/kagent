@@ -193,7 +193,16 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		logging.FromContext(ctx).WarnContext(ctx, "Hermes chain head is unreadable; continuing the conversation by name", "error", err)
 		head = nil
 	}
-	base := head.base(turn.TaskID)
+	base := ""
+	if head != nil {
+		base = head.ResponseID
+	}
+	if retryBase, retryKey, ok := head.retry(turn.TaskID); ok {
+		base = retryBase
+		if retryKey != "" {
+			idempotencyKey = retryKey
+		}
+	}
 	start := d.now()
 	req := request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt, Images: turn.Images, PreviousResponseID: base}
 	result, err := c.respond(ctx, req)
@@ -243,7 +252,7 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		return runtime.Outcome{}, err
 	}
 	if result.ID != "" {
-		if err := saveChainHead(d.cfg.Home, sessionKey, chainHead{ResponseID: result.ID, TaskID: turn.TaskID, Base: base}); err != nil {
+		if err := saveChainHead(d.cfg.Home, sessionKey, chainHead{ResponseID: result.ID, TaskID: turn.TaskID, Base: base, IdempotencyKey: req.IdempotencyKey}); err != nil {
 			// The next turn chains to the older head, so the model does not
 			// see this turn. The answer is still delivered.
 			logging.FromContext(ctx).WarnContext(ctx, "Could not record the Hermes chain head", "error", err)
