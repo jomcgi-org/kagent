@@ -186,7 +186,7 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		defer d.memory.Sync(ctx, true)
 	}
 	start := d.now()
-	result, err := c.respond(ctx, request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt})
+	result, err := c.respond(ctx, request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt, Images: turn.Images})
 	if result.Usage != nil {
 		// Hermes reports one total for the turn, which can span several model
 		// requests, so the total counts tokens and opens no model span.

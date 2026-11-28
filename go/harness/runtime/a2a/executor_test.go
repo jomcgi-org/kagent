@@ -683,3 +683,49 @@ func TestDependencyCancellationReportsTaskFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRequestReadsImageParts(t *testing.T) {
+	image := func(mediaType string, data []byte) *a2atype.Part {
+		return &a2atype.Part{Content: a2atype.Raw(data), MediaType: mediaType}
+	}
+	png := []byte{0x89, 'P', 'N', 'G'}
+	tests := []struct {
+		name    string
+		parts   []*a2atype.Part
+		want    []runtime.Image
+		wantErr string
+	}{
+		{name: "text only", parts: []*a2atype.Part{a2atype.NewTextPart("hi")}},
+		{name: "text then images", parts: []*a2atype.Part{a2atype.NewTextPart("hi"), image("image/png", png), image("image/jpeg", []byte{0xff, 0xd8})},
+			want: []runtime.Image{{MediaType: "image/png", Data: png}, {MediaType: "image/jpeg", Data: []byte{0xff, 0xd8}}}},
+		{name: "image first", parts: []*a2atype.Part{image("image/png", png), a2atype.NewTextPart("hi")}, wantErr: "non-empty text part"},
+		{name: "second text part", parts: []*a2atype.Part{a2atype.NewTextPart("hi"), a2atype.NewTextPart("again")}, wantErr: "only raw image parts"},
+		{name: "image URL", parts: []*a2atype.Part{a2atype.NewTextPart("hi"), a2atype.NewFileURLPart("https://cdn.example/x.png", "image/png")}, wantErr: "only raw image parts"},
+		{name: "not an image", parts: []*a2atype.Part{a2atype.NewTextPart("hi"), image("application/pdf", png)}, wantErr: "media type"},
+		{name: "empty image", parts: []*a2atype.Part{a2atype.NewTextPart("hi"), image("image/png", nil)}, wantErr: "images of 1 to"},
+		{name: "oversized image", parts: []*a2atype.Part{a2atype.NewTextPart("hi"), image("image/png", make([]byte, MaxImageBytes+1))}, wantErr: "images of 1 to"},
+		{name: "too many images", parts: append([]*a2atype.Part{a2atype.NewTextPart("hi")}, slices.Repeat([]*a2atype.Part{image("image/png", png)}, MaxImages+1)...), wantErr: "at most"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			message := a2atype.NewMessage(a2atype.MessageRoleUser, test.parts...)
+			turn, err := validateRequest(&a2asrv.ExecutorContext{TaskID: "task", ContextID: testContextID, Message: message})
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "hi", turn.Prompt)
+			require.Equal(t, test.want, turn.Images)
+		})
+	}
+}
+
+// Raw image parts survive the A2A JSON wire shape the Discord bridge sends.
+func TestImagePartDecodesFromJSON(t *testing.T) {
+	var part a2atype.Part
+	require.NoError(t, part.UnmarshalJSON([]byte(`{"raw":"iVBORw==","mediaType":"image/png","filename":"a.png"}`)))
+	images, err := imageParts([]*a2atype.Part{&part})
+	require.NoError(t, err)
+	require.Equal(t, []runtime.Image{{MediaType: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}}}, images)
+}
