@@ -129,6 +129,15 @@ const (
 	MemoryWriteTool = "memory_write"
 )
 
+// HandoffReadTool and HandoffWriteTool are the memory server's tools for a
+// conversation's handoff note: its latest compaction summary, which the
+// adapter writes after a turn and reads into a new session's first turn.
+// The model never gets them.
+const (
+	HandoffReadTool  = "handoff_read"
+	HandoffWriteTool = "handoff_write"
+)
+
 // mcpServerName matches the names Hermes prefixes onto tool names. Kagent's
 // runtime names use only these characters.
 var mcpServerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
@@ -327,8 +336,10 @@ func (c Config) validateTools() error {
 		if !ok {
 			return fmt.Errorf("memory_sync %q must name an mcp_servers entry", c.MemorySync)
 		}
-		if slices.Contains(server.Tools, MemoryReadTool) || slices.Contains(server.Tools, MemoryWriteTool) {
-			return fmt.Errorf("mcp_servers %q must not list %s or %s: they are for the adapter's memory sync", c.MemorySync, MemoryReadTool, MemoryWriteTool)
+		for _, tool := range []string{MemoryReadTool, MemoryWriteTool, HandoffReadTool, HandoffWriteTool} {
+			if slices.Contains(server.Tools, tool) {
+				return fmt.Errorf("mcp_servers %q must not list %s: it is for the adapter's memory sync", c.MemorySync, tool)
+			}
 		}
 	}
 	if t := c.ServerTools; t != nil {

@@ -37,6 +37,10 @@ type fakeVault struct {
 	// session writing first.
 	beforeWrite func(file string)
 	writes      []map[string]string
+	// handoff is the conversation's handoff note; handoffWrites counts
+	// handoff_write calls.
+	handoff       string
+	handoffWrites int
 }
 
 func newFakeVault(t *testing.T, files map[string]string) (*fakeVault, *httptest.Server) {
@@ -94,8 +98,28 @@ func (v *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 	require.NoError(v.t, json.NewDecoder(r.Body).Decode(&req))
 	require.Equal(v.t, "tools/call", req.Method)
 	file := req.Params.Arguments["file"]
-	require.Contains(v.t, []string{"MEMORY.md", "USER.md"}, file)
 	var out map[string]any
+	switch req.Params.Name {
+	case "handoff_read":
+		require.Empty(v.t, req.Params.Arguments)
+		v.mu.Lock()
+		out = map[string]any{"channel_id": "1", "content": v.handoff}
+		v.mu.Unlock()
+	case "handoff_write":
+		v.mu.Lock()
+		v.handoff = req.Params.Arguments["content"]
+		v.handoffWrites++
+		out = map[string]any{"channel_id": "1", "content": v.handoff}
+		v.mu.Unlock()
+	}
+	if strings.HasPrefix(req.Params.Name, "handoff_") {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "{}"}}, "structuredContent": out, "isError": false,
+		}})
+		return
+	}
+	require.Contains(v.t, []string{"MEMORY.md", "USER.md"}, file)
 	switch req.Params.Name {
 	case "memory_read":
 		content, ok := v.get(file)

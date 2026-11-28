@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -161,7 +163,8 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 	// One Actor owns one Hermes conversation. Its key is bound before the
 	// call, so a turn interrupted mid-call continues the same conversation.
 	sessionKey := turn.ContinuationID
-	if sessionKey == "" {
+	first := sessionKey == ""
+	if first {
 		sessionKey = NewSessionKey()
 		if err := sink.SessionStarted(runtime.SessionStarted{ContinuationID: sessionKey}); err != nil {
 			return runtime.Outcome{}, err
@@ -178,12 +181,16 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 	if turn.TaskID != "" {
 		idempotencyKey = "kagent-task-" + turn.TaskID
 	}
+	input := turn.Prompt
 	if d.memory != nil {
 		// Load the vault's copy, which a new Hermes session puts in its
 		// prompt, or write back a change a failed sync left behind. Then
-		// write back what this turn changed.
+		// write back what this turn changed, and the latest compaction
+		// summary as the conversation's handoff note. A new session's first
+		// turn starts from that note.
 		d.memory.Sync(ctx, false)
 		defer d.memory.Sync(ctx, true)
+		input = d.memory.SeedInput(ctx, turn.TaskID, first, turn.Prompt)
 	}
 	head, err := loadChainHead(d.cfg.Home, sessionKey)
 	if err != nil {
@@ -204,7 +211,7 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		}
 	}
 	start := d.now()
-	req := request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt, Images: turn.Images, PreviousResponseID: base}
+	req := request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: input, Images: turn.Images, PreviousResponseID: base}
 	result, err := c.respond(ctx, req)
 	if errors.Is(err, errPreviousNotFound) {
 		// The response store evicted the head. Continue by conversation name,
@@ -239,6 +246,13 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		var turnErr *TurnError
 		if errors.As(err, &turnErr) {
 			logging.FromContext(ctx).WarnContext(ctx, "Hermes turn did not answer", "status", turnErr.Status, "error", turnErr)
+			if turnErr.Reason() == ReasonContentPolicyBlocked && d.memory != nil {
+				// A summary written during the refused turn never becomes a
+				// handoff note; the next compaction writes a new one.
+				if err := os.Remove(filepath.Join(d.cfg.Home, HandoffFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					logging.FromContext(ctx).WarnContext(ctx, "Could not drop the handoff summary of a refused turn", "error", err)
+				}
+			}
 			if turnErr.Reason() == ReasonContentPolicyBlocked && result.ID != "" {
 				// The chain head stays on the last answered turn, so the refused
 				// message never reaches a later request. Deleting the stored
@@ -257,6 +271,11 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 			// see this turn. The answer is still delivered.
 			logging.FromContext(ctx).WarnContext(ctx, "Could not record the Hermes chain head", "error", err)
 		}
+	}
+	if d.memory != nil {
+		// Only an answered turn updates the handoff note, so a refused
+		// turn can never put its content in the next session.
+		d.memory.PushHandoff(ctx)
 	}
 	if err := sink.TextDelta(runtime.TextDelta{Text: result.Text}); err != nil {
 		return runtime.Outcome{}, err

@@ -1,0 +1,6 @@
+name: kagent-handoff
+version: 1.0.0
+description: "Writes the session's latest compaction summary to HERMES_HOME for the kagent handoff note."
+author: "kagent"
+provides_hooks:
+  - post_llm_call

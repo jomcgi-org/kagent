@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -78,6 +79,14 @@ const ServerToolsPlugin = "kagent-server-tools"
 
 //go:embed plugin/__init__.py plugin/plugin.yaml
 var serverToolsPlugin embed.FS
+
+// HandoffPlugin names the Hermes plugin that writes the session's latest
+// compaction summary to HandoffFile (handoffplugin/__init__.py). It runs
+// with Hermes's memory: the summary goes to the same MCP server.
+const HandoffPlugin = "kagent-handoff"
+
+//go:embed handoffplugin/__init__.py handoffplugin/plugin.yaml
+var handoffPlugin embed.FS
 
 // ProviderName names the providers: entry that holds the compiled endpoint.
 const ProviderName = "kagent"
@@ -293,6 +302,9 @@ func RenderConfig(s Settings) ([]byte, error) {
 		}
 		plugins.Enabled = []string{ServerToolsPlugin}
 	}
+	if s.Memory {
+		plugins.Enabled = append(plugins.Enabled, HandoffPlugin)
+	}
 	return yaml.Marshal(hermesConfig{
 		Model: modelConfig{Default: s.Model, Provider: ProviderName},
 		Providers: map[string]providerConfig{ProviderName: {
@@ -402,37 +414,53 @@ func WriteHome(home string, s Settings) error {
 	if err := utils.ReplacePrivateFile(filepath.Join(home, "hindsight", "config.json"), hindsight); err != nil {
 		return fmt.Errorf("write Hermes hindsight config: %w", err)
 	}
-	return writeServerToolsPlugin(home, s.ServerTools)
+	if err := writeServerToolsPlugin(home, s.ServerTools); err != nil {
+		return err
+	}
+	return writePlugin(home, HandoffPlugin, handoffPlugin, "handoffplugin", s.Memory, nil)
 }
 
 // writeServerToolsPlugin replaces the plugin directory, or removes it when no
 // server tool is selected, so a plugin from an earlier start never loads.
 func writeServerToolsPlugin(home string, tools *ServerTools) error {
-	dir := filepath.Join(home, "plugins", ServerToolsPlugin)
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("remove Hermes server tools plugin: %w", err)
-	}
 	if tools == nil {
-		return nil
+		return writePlugin(home, ServerToolsPlugin, serverToolsPlugin, "plugin", false, nil)
 	}
 	config, err := serverToolsJSON(*tools)
 	if err != nil {
 		return err
 	}
-	if err := utils.EnsurePrivateDir(dir); err != nil {
-		return fmt.Errorf("prepare Hermes server tools plugin: %w", err)
+	return writePlugin(home, ServerToolsPlugin, serverToolsPlugin, "plugin", true, map[string][]byte{"server_tools.json": config})
+}
+
+// writePlugin replaces the directory of plugin name with the embedded files
+// under src plus extra, or removes it when the plugin is off, so a plugin
+// from an earlier start never loads.
+func writePlugin(home, name string, files embed.FS, src string, on bool, extra map[string][]byte) error {
+	dir := filepath.Join(home, "plugins", name)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove Hermes plugin %s: %w", name, err)
 	}
-	files := map[string][]byte{"server_tools.json": config}
-	for _, name := range []string{"__init__.py", "plugin.yaml"} {
-		content, err := serverToolsPlugin.ReadFile("plugin/" + name)
+	if !on {
+		return nil
+	}
+	if err := utils.EnsurePrivateDir(dir); err != nil {
+		return fmt.Errorf("prepare Hermes plugin %s: %w", name, err)
+	}
+	out := maps.Clone(extra)
+	if out == nil {
+		out = map[string][]byte{}
+	}
+	for _, file := range []string{"__init__.py", "plugin.yaml"} {
+		content, err := files.ReadFile(src + "/" + file)
 		if err != nil {
 			return err
 		}
-		files[name] = content
+		out[file] = content
 	}
-	for name, content := range files {
-		if err := utils.ReplacePrivateFile(filepath.Join(dir, name), content); err != nil {
-			return fmt.Errorf("write Hermes server tools plugin: %w", err)
+	for file, content := range out {
+		if err := utils.ReplacePrivateFile(filepath.Join(dir, file), content); err != nil {
+			return fmt.Errorf("write Hermes plugin %s: %w", name, err)
 		}
 	}
 	return nil

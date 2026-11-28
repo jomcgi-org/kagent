@@ -207,6 +207,30 @@ after each turn, for a changed file:
 - The adapter takes Hermes's lock (`<file>.lock`) while it reads or replaces
   a file.
 
+
+### Handoff note
+
+With `spec.hermes.memory`, the adapter also keeps one handoff note per
+conversation on the same MCP server: the latest compaction summary.
+
+```text
+turn, Hermes compacts -> kagent-handoff plugin (post_llm_call) writes
+                         $HERMES_HOME/kagent-handoff.md (summary body, <= 16 KiB)
+after the turn        -> file changed since the last write -> handoff_write {content}
+new session, turn 1   -> handoff_read {} -> HandoffPreamble + note + prompt
+```
+
+- The server names the note from the calling session (bosun-artifacts keys
+  it by the Discord channel the bridge recorded), so the tools take no
+  name. The model never gets them; a binding that lists them is rejected.
+- A retry of the first turn sends the same note, recorded with its task ID
+  in `$HERMES_HOME/kagent-handoff-sync.json`, so the request body matches
+  its idempotency key.
+- A failed read starts the session without the note; a failed write tries
+  again after the next turn. Neither fails a turn.
+- The plugin reads the summary from the turn's working messages with
+  Hermes's own `ContextCompressor` helpers, and loads only with memory.
+
 ## Limits
 
 - Cancellation closes the HTTP request. Hermes can finish the turn on its side.
