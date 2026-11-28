@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -244,6 +246,13 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		var turnErr *TurnError
 		if errors.As(err, &turnErr) {
 			logging.FromContext(ctx).WarnContext(ctx, "Hermes turn did not answer", "status", turnErr.Status, "error", turnErr)
+			if turnErr.Reason() == ReasonContentPolicyBlocked && d.memory != nil {
+				// A summary written during the refused turn never becomes a
+				// handoff note; the next compaction writes a new one.
+				if err := os.Remove(filepath.Join(d.cfg.Home, HandoffFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					logging.FromContext(ctx).WarnContext(ctx, "Could not drop the handoff summary of a refused turn", "error", err)
+				}
+			}
 			if turnErr.Reason() == ReasonContentPolicyBlocked && result.ID != "" {
 				// The chain head stays on the last answered turn, so the refused
 				// message never reaches a later request. Deleting the stored

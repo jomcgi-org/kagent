@@ -113,6 +113,9 @@ func TestARefusedTurnLeavesTheNote(t *testing.T) {
 	out, err := d.Run(t.Context(), runtime.Turn{TaskID: "2", Prompt: "blocked", ContinuationID: sink.sessions[0]}, &recordingSink{})
 	require.NoError(t, err)
 	require.NotNil(t, out.Failure)
+	// A later answered turn in the same session does not send it either.
+	_, err = d.Run(t.Context(), runtime.Turn{TaskID: "3", Prompt: "history", ContinuationID: sink.sessions[0]}, &recordingSink{})
+	require.NoError(t, err)
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
 	require.Equal(t, "good note", vault.handoff)
