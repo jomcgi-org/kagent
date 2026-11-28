@@ -101,6 +101,24 @@ func TestHandoffSurvivesAnOutage(t *testing.T) {
 	require.Equal(t, "the summary", vault.handoff)
 }
 
+// A refused turn never updates the note, even if the summary file changed.
+func TestARefusedTurnLeavesTheNote(t *testing.T) {
+	vault, server := newFakeVault(t, map[string]string{})
+	vault.handoff = "good note"
+	d, home := newMemoryDriver(t, server.URL)
+	sink := &recordingSink{}
+	_, err := d.Run(t.Context(), runtime.Turn{TaskID: "1", Prompt: "hi"}, sink)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(home, HandoffFile), []byte("refused content"), 0o600))
+	out, err := d.Run(t.Context(), runtime.Turn{TaskID: "2", Prompt: "blocked", ContinuationID: sink.sessions[0]}, &recordingSink{})
+	require.NoError(t, err)
+	require.NotNil(t, out.Failure)
+	vault.mu.Lock()
+	defer vault.mu.Unlock()
+	require.Equal(t, "good note", vault.handoff)
+	require.Zero(t, vault.handoffWrites)
+}
+
 // The handoff plugin loads with Hermes's memory only.
 func TestHandoffPluginRunsWithMemory(t *testing.T) {
 	home := t.TempDir()

@@ -187,7 +187,6 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		// summary as the conversation's handoff note. A new session's first
 		// turn starts from that note.
 		d.memory.Sync(ctx, false)
-		defer d.memory.PushHandoff(ctx)
 		defer d.memory.Sync(ctx, true)
 		input = d.memory.SeedInput(ctx, turn.TaskID, first, turn.Prompt)
 	}
@@ -263,6 +262,11 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 			// see this turn. The answer is still delivered.
 			logging.FromContext(ctx).WarnContext(ctx, "Could not record the Hermes chain head", "error", err)
 		}
+	}
+	if d.memory != nil {
+		// Only an answered turn updates the handoff note, so a refused
+		// turn can never put its content in the next session.
+		d.memory.PushHandoff(ctx)
 	}
 	if err := sink.TextDelta(runtime.TextDelta{Text: result.Text}); err != nil {
 		return runtime.Outcome{}, err
