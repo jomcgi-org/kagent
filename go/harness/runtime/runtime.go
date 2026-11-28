@@ -26,8 +26,15 @@ type Turn struct {
 	ContextID      string
 	Origin         TraceOrigin
 	Prompt         string
+	Images         []Image
 	ContinuationID string
 	InputResponse  InputResponse
+}
+
+// Image is one image the user sent with a turn's prompt, in message order.
+type Image struct {
+	MediaType string
+	Data      []byte
 }
 
 // InputResponse is one structured response to a parked native turn.

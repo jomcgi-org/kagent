@@ -108,6 +108,9 @@ func (d *ProcessDriver) run(ctx context.Context, turn runtime.Turn, tool *toolCo
 			returnErr = &turnNotStartedError{err: returnErr}
 		}
 	}()
+	if len(turn.Images) > 0 {
+		return runtime.Outcome{}, fmt.Errorf("codex harness does not accept images")
+	}
 	if strings.TrimSpace(turn.Prompt) == "" && tool == nil {
 		return runtime.Outcome{}, fmt.Errorf("codex prompt is required")
 	}

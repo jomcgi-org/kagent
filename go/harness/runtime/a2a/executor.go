@@ -859,14 +859,56 @@ func validateRequest(reqCtx *a2asrv.ExecutorContext) (runtime.Turn, error) {
 		}
 		return runtime.Turn{InputResponse: &runtime.AskUserResponse{ID: response.ID, Answers: answers}}, nil
 	}
-	if len(reqCtx.Message.Parts) != 1 || reqCtx.Message.Parts[0] == nil {
+	parts := reqCtx.Message.Parts
+	if len(parts) == 0 || parts[0] == nil {
 		return runtime.Turn{}, fmt.Errorf("harness runtime accepts exactly one user text part")
 	}
-	text := reqCtx.Message.Parts[0].Text()
+	text := parts[0].Text()
 	if text == "" {
 		return runtime.Turn{}, fmt.Errorf("harness runtime accepts a non-empty text part")
 	}
-	return runtime.Turn{Prompt: text}, nil
+	images, err := imageParts(parts[1:])
+	if err != nil {
+		return runtime.Turn{}, err
+	}
+	return runtime.Turn{Prompt: text, Images: images}, nil
+}
+
+// MaxImages and MaxImageBytes bound the images one user message carries
+// after its text part. The size is Anthropic's 5 MB base64 image limit as
+// raw bytes.
+const (
+	MaxImages     = 4
+	MaxImageBytes = 3_750_000
+)
+
+// imageMediaTypes are the image types the model APIs accept.
+var imageMediaTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
+
+// imageParts reads the parts after a message's text part: each one must be
+// raw image bytes of a supported type.
+func imageParts(parts []*a2atype.Part) ([]runtime.Image, error) {
+	if len(parts) > MaxImages {
+		return nil, fmt.Errorf("harness runtime accepts at most %d images", MaxImages)
+	}
+	var images []runtime.Image
+	for _, part := range parts {
+		if part == nil {
+			return nil, fmt.Errorf("harness runtime does not accept an empty part")
+		}
+		raw, ok := part.Content.(a2atype.Raw)
+		if !ok {
+			return nil, fmt.Errorf("harness runtime accepts only raw image parts after the text part")
+		}
+		if !imageMediaTypes[part.MediaType] {
+			return nil, fmt.Errorf("harness runtime does not accept image media type %q", part.MediaType)
+		}
+		if len(raw) == 0 || len(raw) > MaxImageBytes {
+			return nil, fmt.Errorf("harness runtime accepts images of 1 to %d bytes", MaxImageBytes)
+		}
+		images = append(images, runtime.Image{MediaType: part.MediaType, Data: []byte(raw)})
+	}
+	return images, nil
 }
 
 func requiresInput(state a2atype.TaskState) bool {

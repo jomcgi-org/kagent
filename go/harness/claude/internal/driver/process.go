@@ -164,6 +164,9 @@ func (d *ProcessDriver) run(ctx context.Context, turn runtime.Turn, sink runtime
 			}
 		}
 	}()
+	if len(turn.Images) > 0 {
+		return runtime.Outcome{}, fmt.Errorf("Claude harness does not accept images")
+	}
 	if strings.TrimSpace(turn.Prompt) == "" && seed == nil {
 		return runtime.Outcome{}, fmt.Errorf("Claude prompt is required")
 	}

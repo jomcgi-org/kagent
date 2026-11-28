@@ -478,3 +478,22 @@ func TestValidateRequiresGatewayExecutable(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorContains(t, d.Validate(t.Context()), "find Hermes gateway executable")
 }
+
+func TestClientRespondSendsImagesAsInputImageParts(t *testing.T) {
+	var seenBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&seenBody)
+		_, _ = w.Write([]byte(`{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a cat"}]}]}`))
+	}))
+	defer server.Close()
+	c := &client{baseURL: server.URL, key: "k", http: server.Client(), maxBytes: 1024}
+	images := []runtime.Image{{MediaType: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}}, {MediaType: "image/jpeg", Data: []byte{0xff, 0xd8}}}
+	result, err := c.respond(t.Context(), request{SessionKey: "kagent-s", Input: "what is this?", Images: images})
+	require.NoError(t, err)
+	require.Equal(t, "a cat", result.Text)
+	require.Equal(t, []any{map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "input_text", "text": "what is this?"},
+		map[string]any{"type": "input_image", "image_url": "data:image/png;base64,iVBORw=="},
+		map[string]any{"type": "input_image", "image_url": "data:image/jpeg;base64,/9g="},
+	}}}, seenBody["input"])
+}

@@ -3,6 +3,7 @@ package driver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
@@ -59,6 +61,7 @@ type request struct {
 	IdempotencyKey string
 	Instructions   string
 	Input          string
+	Images         []runtime.Image
 }
 
 type usage struct {
@@ -75,10 +78,37 @@ type reply struct {
 }
 
 type responsesRequest struct {
-	Input        string `json:"input"`
+	// Input is the prompt text, or one user message item when the turn
+	// carries images.
+	Input        any    `json:"input"`
 	Instructions string `json:"instructions,omitempty"`
 	Store        bool   `json:"store"`
 	Conversation string `json:"conversation"`
+}
+
+type inputItem struct {
+	Role    string         `json:"role"`
+	Content []inputContent `json:"content"`
+}
+
+type inputContent struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+// responsesInput is r's Responses input: the plain text, or a user message
+// with the text and each image as a data URL, which Hermes passes to the
+// model as image_url parts.
+func responsesInput(r request) any {
+	if len(r.Images) == 0 {
+		return r.Input
+	}
+	content := []inputContent{{Type: "input_text", Text: r.Input}}
+	for _, image := range r.Images {
+		content = append(content, inputContent{Type: "input_image", ImageURL: "data:" + image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)})
+	}
+	return []inputItem{{Role: "user", Content: content}}
 }
 
 type responsesBody struct {
@@ -125,7 +155,7 @@ func (c *client) respond(ctx context.Context, r request) (reply, error) {
 	if !validSessionKey(r.SessionKey) {
 		return reply{}, fmt.Errorf("invalid Hermes session key")
 	}
-	body, err := json.Marshal(responsesRequest{Input: r.Input, Instructions: r.Instructions, Store: true, Conversation: r.SessionKey})
+	body, err := json.Marshal(responsesRequest{Input: responsesInput(r), Instructions: r.Instructions, Store: true, Conversation: r.SessionKey})
 	if err != nil {
 		return reply{}, err
 	}
