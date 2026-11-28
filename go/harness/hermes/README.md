@@ -28,11 +28,19 @@ image; make that binary the entrypoint.
 ```text
 private A2A (gRPC) -> runtime/a2a executor -> driver.Run
   -> POST 127.0.0.1:<port>/v1/responses   (Bearer <random key>,
-       X-Hermes-Session-Key = conversation = Actor session key,
+       X-Hermes-Session-Key = Actor session key,
+       previous_response_id = chain head, or conversation = session key,
        Idempotency-Key = kagent-task-<task ID>, store = true)
-  <- completed | incomplete  -> one text artifact, task completed
-  <- failed | cancelled | any other status -> task failed (no polling)
+  <- completed | incomplete  -> one text artifact, task completed,
+                                chain head = this response
+  <- failed | cancelled | any other status -> task failed (no polling),
+                                chain head unchanged
 ```
+
+A failed task's message is fixed text. Only an allowlisted Hermes reason
+code joins it, never the provider's text:
+`Hermes turn failed: content_policy_blocked` for a turn that the provider's
+safety filter refused.
 
 ## Implemented support
 
@@ -126,10 +134,30 @@ than `baseUrl` and `apiFormat: chatCompletions`.
 The shared executor binds one native conversation to each Actor; the A2A
 `contextId` names only controller history. On its first turn the adapter
 creates `kagent-<uuid>`, binds it through `runtime.SessionStarted` before it
-calls Hermes, and sends it as both `X-Hermes-Session-Key` and `conversation` on
-every later turn. The continuation store keeps it in `DurableDir`, so it
-survives Actor replacement and snapshot restore. The header alone scopes the
-session; `conversation` makes Hermes 0.23.4 chain the transcript.
+calls Hermes, and sends it as `X-Hermes-Session-Key` on every later turn. The
+continuation store keeps it in `DurableDir`, so it survives Actor replacement
+and snapshot restore. The header alone scopes the session; Hermes 0.23.4
+replays a transcript only through `previous_response_id` or `conversation`.
+
+Hermes's API server stores every turn, a refused one too, and moves the
+`conversation` name to it. A provider filter judges the whole transcript, so
+a refused message in it refuses every later turn. (Hermes's chat gateway
+removes a refused turn; its API server does not.) So the driver keeps a chain
+head: the last answered response of each session, in
+`HERMES_HOME/kagent-chain/`. A turn chains to the head with
+`previous_response_id`, and only an answered turn moves the head. A refused
+turn (`content_policy_blocked`) is also deleted from Hermes's response store,
+which drops a `conversation` name that points at it.
+
+- A session with no head (its first turn, or a session from an older
+  adapter) continues by `conversation` name.
+- A retry of the task that moved the head sends that turn's request again,
+  under the same idempotency key, so Hermes replays the first answer.
+- If the response store no longer holds the head, the turn continues by
+  `conversation` name under the idempotency key `kagent-task-<task
+  ID>-conversation`.
+- A turn that the driver did not see answered (a timeout) is not in the
+  chain, even if Hermes later finishes it.
 
 ## Gateway lifecycle
 

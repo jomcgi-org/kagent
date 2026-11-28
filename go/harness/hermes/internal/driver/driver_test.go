@@ -222,6 +222,9 @@ func TestClientRespond(t *testing.T) {
 		{name: "completed skips commentary", code: 200, body: `{"id":"r","status":"completed","output":[{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"note"}]},{"type":"reasoning"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a"},{"type":"output_text","text":"b"}]}],"usage":{"input_tokens":3,"output_tokens":2}}`, wantText: "ab"},
 		{name: "incomplete keeps the wrap-up", code: 200, body: `{"status":"incomplete","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}]}`, wantText: "partial"},
 		{name: "failed", code: 200, body: `{"status":"failed","output":[],"error":{"message":"provider said no"}}`, wantStatus: "failed", wantPublic: "Hermes turn failed"},
+		{name: "refused by the provider filter", code: 200, body: `{"status":"failed","output":[],"error":{"message":"content_policy_blocked: provider said no"}}`, wantStatus: "failed", wantPublic: "Hermes turn failed: content_policy_blocked"},
+		{name: "unlisted reason", code: 200, body: `{"status":"failed","output":[],"error":{"message":"billing: provider said no"}}`, wantStatus: "failed", wantPublic: "Hermes turn failed"},
+		{name: "reason must be the whole code", code: 200, body: `{"status":"failed","output":[],"error":{"message":"content_policy_blocked_x provider said no"}}`, wantStatus: "failed", wantPublic: "Hermes turn failed"},
 		{name: "cancelled", code: 200, body: `{"status":"cancelled","output":[]}`, wantStatus: "cancelled", wantPublic: "Hermes turn was cancelled"},
 		{name: "unsettled is never polled", code: 200, body: `{"status":"in_progress","output":[]}`, wantStatus: "in_progress", wantPublic: "Hermes turn did not settle"},
 		{name: "completed without an answer", code: 200, body: `{"status":"completed","output":[]}`, wantStatus: "completed", wantPublic: "Hermes turn finished without an answer"},
@@ -263,6 +266,50 @@ func TestClientRespond(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientChainsToAPreviousResponse(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		code    int
+		wantErr error
+	}{{name: "answered", code: 200}, {name: "evicted", code: 404, wantErr: errPreviousNotFound}} {
+		t.Run(test.name, func(t *testing.T) {
+			var seenBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&seenBody)
+				w.WriteHeader(test.code)
+				_, _ = w.Write([]byte(`{"id":"r2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a"}]}],"error":{"message":"Previous response not found"}}`))
+			}))
+			defer server.Close()
+			c := &client{baseURL: server.URL, key: "k", http: server.Client(), maxBytes: 1024}
+			_, err := c.respond(t.Context(), request{SessionKey: "kagent-s", Input: "hi", PreviousResponseID: "r1"})
+			// Hermes refuses a request with both a conversation and a previous response.
+			require.Equal(t, map[string]any{"input": "hi", "store": true, "previous_response_id": "r1"}, seenBody)
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestTurnErrorPublishesOnlyAllowlistedReasons(t *testing.T) {
+	for detail, want := range map[string]string{
+		"content_policy_blocked: Cyber safeguards flagged this message": ReasonContentPolicyBlocked,
+		"content_policy_blocked":                       ReasonContentPolicyBlocked,
+		"content_policy_blockedness: x":                "",
+		"context_overflow: too long":                   "",
+		"provider said content_policy_blocked: nested": "",
+		"": "",
+	} {
+		turnErr := &TurnError{Status: "failed", Detail: detail}
+		require.Equal(t, want, turnErr.Reason(), detail)
+		require.NotContains(t, turnErr.Public(), "Cyber", detail)
+	}
+	// Only a failed turn carries a reason.
+	require.Equal(t, "Hermes turn was cancelled", (&TurnError{Status: "cancelled", Detail: "content_policy_blocked: x"}).Public())
 }
 
 func TestClientRejectsInvalidSessionKey(t *testing.T) {
@@ -347,9 +394,14 @@ func TestRunWithFakeGateway(t *testing.T) {
 	requests, err := fakehermes.Requests(home)
 	require.NoError(t, err)
 	require.Len(t, requests, 2)
+	// The first turn continues by conversation name; the next chains to the
+	// answered response.
+	require.Equal(t, sessionKey, requests[0].Conversation)
+	require.Empty(t, requests[0].Previous)
+	require.Empty(t, requests[1].Conversation)
+	require.Equal(t, "resp_1", requests[1].Previous)
 	for i, request := range requests {
 		require.Equal(t, sessionKey, request.SessionKey)
-		require.Equal(t, sessionKey, request.Conversation)
 		require.True(t, request.Store)
 		require.Equal(t, "be brief", request.Instructions)
 		require.Regexp(t, `^Bearer [0-9a-f]{64}$`, request.Authorization)
@@ -369,13 +421,111 @@ func TestRunFailuresAreSafeOutcomes(t *testing.T) {
 	d, _ := newFakeDriver(t, os.Environ())
 	for prompt, want := range map[string]string{"fail": "Hermes turn failed", "pending": "Hermes turn did not settle", " ": "Hermes harness requires a text prompt"} {
 		sink := &recordingSink{}
-		outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: "t", Prompt: prompt, ContinuationID: "kagent-fixed"}, sink)
+		outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: "t-" + prompt, Prompt: prompt, ContinuationID: "kagent-fixed"}, sink)
 		require.NoError(t, err, prompt)
 		require.NotNil(t, outcome.Failure, prompt)
 		require.Equal(t, want, outcome.Failure.Message)
 		require.Nil(t, outcome.Pending)
 		require.Empty(t, sink.text.String())
 	}
+}
+
+// A turn the provider's filter refuses leaves the chain, so the next turn
+// continues the transcript from before it and is answered.
+func TestRunDropsARefusedTurnFromTheConversation(t *testing.T) {
+	d, home := newFakeDriver(t, os.Environ())
+	run := func(taskID, prompt string) (runtime.Outcome, string) {
+		t.Helper()
+		sink := &recordingSink{}
+		outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: taskID, Prompt: prompt, ContinuationID: "kagent-fixed"}, sink)
+		require.NoError(t, err, prompt)
+		return outcome, sink.text.String()
+	}
+	_, text := run("t1", "hello")
+	require.Equal(t, "echo: hello", text)
+
+	outcome, text := run("t2", "a blocked joke")
+	require.NotNil(t, outcome.Failure)
+	require.Equal(t, "Hermes turn failed: content_policy_blocked", outcome.Failure.Message)
+	require.NotContains(t, outcome.Failure.Message, "Cyber")
+	require.Empty(t, text)
+
+	outcome, text = run("t3", "history")
+	require.Nil(t, outcome.Failure, "a later turn must not carry the refused message")
+	require.Equal(t, "history: hello", text)
+	_, text = run("t4", "history")
+	require.Equal(t, "history: hello|history", text)
+
+	// The refused turn is no longer stored.
+	for id, transcript := range fakehermes.StoredResponses(home) {
+		require.NotContains(t, strings.Join(transcript, "|"), "blocked", id)
+	}
+}
+
+// A session from an adapter that chained by conversation name only: its
+// first refused turn moves the name, and deleting that turn frees it.
+func TestRunFreesAConversationNameAfterARefusal(t *testing.T) {
+	d, home := newFakeDriver(t, os.Environ())
+	require.NoError(t, fakehermes.SeedConversation(home, "kagent-legacy", []string{"older"}))
+	sink := &recordingSink{}
+	_, err := d.Run(t.Context(), runtime.Turn{TaskID: "t1", Prompt: "blocked", ContinuationID: "kagent-legacy"}, sink)
+	require.NoError(t, err)
+	sink = &recordingSink{}
+	outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: "t2", Prompt: "history", ContinuationID: "kagent-legacy"}, sink)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Equal(t, "history: ", sink.text.String())
+}
+
+// A retry of the task that moved the chain sends that turn's request again,
+// so Hermes replays its first answer instead of refusing a changed body.
+func TestRunRetriesATaskWithItsFirstRequest(t *testing.T) {
+	d, home := newFakeDriver(t, os.Environ())
+	for _, taskID := range []string{"t1", "t2", "t2"} {
+		sink := &recordingSink{}
+		outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: taskID, Prompt: "hello " + taskID, ContinuationID: "kagent-fixed"}, sink)
+		require.NoError(t, err)
+		require.Nil(t, outcome.Failure)
+		require.Equal(t, "echo: hello "+taskID, sink.text.String())
+	}
+	requests, err := fakehermes.Requests(home)
+	require.NoError(t, err)
+	require.Len(t, requests, 3)
+	require.Equal(t, requests[1], requests[2])
+	require.Equal(t, "resp_1", requests[2].Previous)
+}
+
+// When the response store no longer holds the head, the turn continues by
+// conversation name under another idempotency key.
+func TestRunContinuesByNameWhenTheHeadIsGone(t *testing.T) {
+	d, home := newFakeDriver(t, os.Environ())
+	require.NoError(t, saveChainHead(home, "kagent-fixed", chainHead{ResponseID: "resp_gone", TaskID: "t0"}))
+	sink := &recordingSink{}
+	outcome, err := d.Run(t.Context(), runtime.Turn{TaskID: "t1", Prompt: "hello", ContinuationID: "kagent-fixed"}, sink)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Equal(t, "echo: hello", sink.text.String())
+	requests, err := fakehermes.Requests(home)
+	require.NoError(t, err)
+	require.Len(t, requests, 2)
+	require.Equal(t, "resp_gone", requests[0].Previous)
+	require.Equal(t, "kagent-fixed", requests[1].Conversation)
+	require.Equal(t, "kagent-task-t1-conversation", requests[1].IdempotencyKey)
+	head, err := loadChainHead(home, "kagent-fixed")
+	require.NoError(t, err)
+	require.Equal(t, &chainHead{ResponseID: "resp_1", TaskID: "t1", IdempotencyKey: "kagent-task-t1-conversation"}, head)
+
+	// A retry of that task resends the fallback request, so Hermes replays
+	// it and does not run the turn twice.
+	sink = &recordingSink{}
+	_, err = d.Run(t.Context(), runtime.Turn{TaskID: "t1", Prompt: "hello", ContinuationID: "kagent-fixed"}, sink)
+	require.NoError(t, err)
+	require.Equal(t, "echo: hello", sink.text.String())
+	requests, err = fakehermes.Requests(home)
+	require.NoError(t, err)
+	require.Len(t, requests, 3)
+	require.Equal(t, requests[1], requests[2])
+	require.Len(t, fakehermes.StoredResponses(home), 1, "the retry must not run the turn again")
 }
 
 func TestRunReportsCancellation(t *testing.T) {

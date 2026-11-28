@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode"
 
@@ -18,11 +20,31 @@ import (
 // SessionKeyHeader names the Hermes conversation for session and memory scoping.
 const SessionKeyHeader = "X-Hermes-Session-Key"
 
+// ReasonContentPolicyBlocked is the Hermes failure reason for a turn the
+// model provider's safety filter refused. Hermes 0.23.4 starts the turn error
+// with it (agent/conversation_loop.py: "content_policy_blocked: <detail>").
+const ReasonContentPolicyBlocked = "content_policy_blocked"
+
+// publicReasons are the Hermes failure reasons a TurnError may publish. Each
+// is a fixed code; the provider text after it is never published.
+var publicReasons = []string{ReasonContentPolicyBlocked}
+
 // TurnError is a Hermes turn that ended without a usable answer. Its status
-// is safe to publish; Detail comes from Hermes and is only logged.
+// and an allowlisted reason code are safe to publish; Detail comes from
+// Hermes and is only logged.
 type TurnError struct {
 	Status string
 	Detail string
+}
+
+// Reason returns the allowlisted failure reason that starts Detail, or "".
+func (e *TurnError) Reason() string {
+	for _, reason := range publicReasons {
+		if rest, ok := strings.CutPrefix(e.Detail, reason); ok && (rest == "" || rest[0] == ':') {
+			return reason
+		}
+	}
+	return ""
 }
 
 func (e *TurnError) Error() string {
@@ -36,6 +58,9 @@ func (e *TurnError) Error() string {
 func (e *TurnError) Public() string {
 	switch e.Status {
 	case "failed":
+		if reason := e.Reason(); reason != "" {
+			return "Hermes turn failed: " + reason
+		}
 		return "Hermes turn failed"
 	case "cancelled":
 		return "Hermes turn was cancelled"
@@ -62,6 +87,9 @@ type request struct {
 	Instructions   string
 	Input          string
 	Images         []runtime.Image
+	// PreviousResponseID chains the turn to that stored response. Empty
+	// chains it to the latest response of the session key's conversation.
+	PreviousResponseID string
 }
 
 type usage struct {
@@ -83,7 +111,9 @@ type responsesRequest struct {
 	Input        any    `json:"input"`
 	Instructions string `json:"instructions,omitempty"`
 	Store        bool   `json:"store"`
-	Conversation string `json:"conversation"`
+	// Hermes refuses a request with both fields.
+	Conversation       string `json:"conversation,omitempty"`
+	PreviousResponseID string `json:"previous_response_id,omitempty"`
 }
 
 type inputItem struct {
@@ -110,6 +140,10 @@ func responsesInput(r request) any {
 	}
 	return []inputItem{{Role: "user", Content: content}}
 }
+
+// errPreviousNotFound is a Hermes 404 for a request that named a previous
+// response: the response store no longer holds it.
+var errPreviousNotFound = errors.New("Hermes has no stored previous response")
 
 type responsesBody struct {
 	ID     string `json:"id"`
@@ -146,16 +180,20 @@ func validSessionKey(key string) bool {
 
 // respond runs one turn with one non-streaming /v1/responses call.
 //
-// The session key goes in SessionKeyHeader and also names the
-// `conversation`, so the next turn chains to this one: at v0.23.4 the header
-// alone scopes the session but does not replay its transcript. The
-// idempotency key makes a retry of the same task return the first result.
-// A TurnError returns with the usage Hermes reported.
+// The session key goes in SessionKeyHeader. The turn chains to
+// r.PreviousResponseID, or else the session key names the `conversation`:
+// at v0.23.4 the header alone scopes the session but does not replay its
+// transcript. The idempotency key makes a retry of the same task return the
+// first result. A TurnError returns with the usage Hermes reported.
 func (c *client) respond(ctx context.Context, r request) (reply, error) {
 	if !validSessionKey(r.SessionKey) {
 		return reply{}, fmt.Errorf("invalid Hermes session key")
 	}
-	body, err := json.Marshal(responsesRequest{Input: responsesInput(r), Instructions: r.Instructions, Store: true, Conversation: r.SessionKey})
+	payload := responsesRequest{Input: responsesInput(r), Instructions: r.Instructions, Store: true, PreviousResponseID: r.PreviousResponseID}
+	if r.PreviousResponseID == "" {
+		payload.Conversation = r.SessionKey
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return reply{}, err
 	}
@@ -187,6 +225,9 @@ func (c *client) respond(ctx context.Context, r request) (reply, error) {
 		// Hermes' message can carry provider text, so only the log has it.
 		if decodeErr == nil && out.Error != nil && out.Error.Message != "" {
 			logging.FromContext(ctx).WarnContext(ctx, "Hermes API server refused the turn", "status", resp.StatusCode, "error", fmt.Sprintf("%.300s", out.Error.Message))
+		}
+		if resp.StatusCode == http.StatusNotFound && r.PreviousResponseID != "" {
+			return reply{}, fmt.Errorf("Hermes HTTP %d: %w", resp.StatusCode, errPreviousNotFound)
 		}
 		return reply{}, fmt.Errorf("Hermes HTTP %d", resp.StatusCode)
 	}
@@ -224,4 +265,24 @@ func (c *client) respond(ctx context.Context, r request) (reply, error) {
 	}
 	result.Text = text.String()
 	return result, nil
+}
+
+// forget deletes a stored response. Hermes also drops a conversation name
+// that points at it, and the response's idempotency record.
+func (c *client) forget(ctx context.Context, responseID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, strings.TrimSuffix(c.baseURL, "/")+"/v1/responses/"+url.PathEscape(responseID), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("call Hermes: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, int64(c.maxBytes)))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("Hermes HTTP %d", resp.StatusCode)
+	}
+	return nil
 }

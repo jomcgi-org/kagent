@@ -88,8 +88,12 @@ func TestExecutorRunsTurnsThroughHermes(t *testing.T) {
 	require.Len(t, requests, 3)
 	for _, r := range requests {
 		require.Equal(t, requests[0].SessionKey, r.SessionKey, "one Actor owns one Hermes conversation")
-		require.Equal(t, r.SessionKey, r.Conversation)
 	}
+	// The first turn continues by name. The failed turn never joins the
+	// chain, and the replacement process continues from the answered turn.
+	require.Equal(t, requests[0].SessionKey, requests[0].Conversation)
+	require.Equal(t, "resp_1", requests[1].Previous)
+	require.Equal(t, "resp_1", requests[2].Previous)
 	stored, err := os.ReadFile(filepath.Join(dataDir, "adapter", "state.json"))
 	require.NoError(t, err)
 	require.Contains(t, string(stored), `"runtime": "hermes"`)
