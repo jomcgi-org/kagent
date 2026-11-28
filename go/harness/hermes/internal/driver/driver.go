@@ -179,11 +179,11 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		idempotencyKey = "kagent-task-" + turn.TaskID
 	}
 	if d.memory != nil {
-		// Hermes builds its agent, and reads the memory files, for each
-		// turn: load the vault's copy, or write back a change a failed sync
-		// left behind. Then write back what this turn changed.
-		d.memory.Sync(ctx)
-		defer d.memory.Sync(ctx)
+		// Load the vault's copy, which a new Hermes session puts in its
+		// prompt, or write back a change a failed sync left behind. Then
+		// write back what this turn changed.
+		d.memory.Sync(ctx, false)
+		defer d.memory.Sync(ctx, true)
 	}
 	start := d.now()
 	result, err := c.respond(ctx, request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt})

@@ -146,8 +146,8 @@ next turn gets a new one.
 
 ```text
 before each turn, for MEMORY.md and USER.md:
-  local file unchanged since the last sync -> memory_read -> local file
-  local file changed (a failed write-back)  -> write back, as below
+  local file unchanged since the last sync, or missing -> memory_read -> local file
+  local file changed (a failed write-back)              -> write back, as below
 turn: Hermes reads memories/ into its prompt; its memory tool edits them
 after each turn, for a changed file:
   memory_write(content, base_version) -> ok: record the new version
@@ -158,7 +158,16 @@ after each turn, for a changed file:
 - Entries are split on Hermes's `\n§\n` delimiter. A replaced entry is a
   removal and an addition, inserted after the nearest earlier entry the newer
   copy still holds. A merged file over Hermes's limit (2200 characters for
-  `MEMORY.md`, 1375 for `USER.md`) keeps the newer copy and logs.
+  `MEMORY.md`, 1375 for `USER.md`) keeps the newer copy's entries, applies
+  only this session's removals, and logs.
+- Hermes reads the files into the prompt when a session starts. A
+  continuing session reuses its stored system prompt for the prefix cache
+  (`agent/conversation_loop.py` `_restore_or_build_system_prompt`), so
+  another session's change reaches its prompt only when Hermes rebuilds the
+  prompt, such as at compression. Its memory tool still edits the newest
+  local copy, and the write-back merges.
+- A missing local file loads from the server: Hermes never deletes one, so a
+  write-back must not empty the server's copy.
 - A failed call logs and never fails the turn: the local copy stays, and the
   next turn writes it back. `$HERMES_HOME/kagent-memory-sync.json` records the
   last synced copy and version, so a new process on the same volume still

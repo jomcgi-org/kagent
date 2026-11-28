@@ -81,11 +81,16 @@ func (m *memorySyncer) dir() string { return filepath.Join(m.home, "memories") }
 
 // Sync writes back each local file changed since its last sync, merging into a
 // newer vault copy, and otherwise loads the vault copy into the local file.
-// The gateway must be idle: Hermes writes the files only during a turn.
-func (m *memorySyncer) Sync(ctx context.Context) {
+// The gateway must be idle: Hermes writes the files only during a turn. With
+// detach, a cancelled ctx does not stop the sync, so a turn's change still
+// goes back after the turn is cancelled.
+func (m *memorySyncer) Sync(ctx context.Context, detach bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), memorySyncTimeout)
+	if detach {
+		ctx = context.WithoutCancel(ctx)
+	}
+	ctx, cancel := context.WithTimeout(ctx, memorySyncTimeout)
 	defer cancel()
 	log := logging.FromContext(ctx)
 	if err := utils.EnsurePrivateDir(m.dir()); err != nil {
@@ -120,8 +125,10 @@ func (m *memorySyncer) syncFile(ctx context.Context, name string, limit int, bas
 		return base, fmt.Errorf("read %s: %w", name, err)
 	}
 	local := string(raw)
-	if base != nil && local == base.Content || base == nil && !exists {
-		// Unchanged since the last sync, or never synced and empty: load.
+	// Hermes never deletes a memory file, so a missing one was lost locally,
+	// not emptied: load it rather than write back an empty file.
+	if !exists || base != nil && local == base.Content {
+		// Unchanged since the last sync, or missing: load.
 		current, err := m.read(ctx, name)
 		if err != nil {
 			return base, err
@@ -156,9 +163,11 @@ func (m *memorySyncer) syncFile(ctx context.Context, name string, limit int, bas
 		// the newer copy and try again from its version.
 		merged := MergeEntries(from.Content, local, result.Content)
 		if utf8.RuneCountInString(merged) > limit {
-			logging.FromContext(ctx).WarnContext(ctx, "merged hermes memory exceeds its limit; keeping the newer copy",
+			// Keep the newer copy's entries; only this session's removals
+			// still apply, since they cannot exceed the limit.
+			logging.FromContext(ctx).WarnContext(ctx, "merged hermes memory exceeds its limit; dropping this session's additions",
 				"file", name, "chars", utf8.RuneCountInString(merged), "limit", limit)
-			merged = result.Content
+			merged = MergeEntries(from.Content, keepOnly(local, from.Content), result.Content)
 		}
 		if merged == result.Content {
 			if err := m.writeLocal(path, merged); err != nil {
@@ -181,6 +190,15 @@ func ParseEntries(raw string) []string {
 		}
 	}
 	return entries
+}
+
+// keepOnly returns the entries of local that base also holds: local without
+// its additions.
+func keepOnly(local, base string) string {
+	baseEntries := ParseEntries(base)
+	return strings.Join(slices.DeleteFunc(ParseEntries(local), func(entry string) bool {
+		return !slices.Contains(baseEntries, entry)
+	}), EntryDelimiter)
 }
 
 // MergeEntries applies the entry changes from base to local onto newer: it

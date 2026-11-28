@@ -2,6 +2,7 @@ package driver
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -151,7 +152,7 @@ func TestMemorySyncLoadsTheVaultAndWritesBackAChange(t *testing.T) {
 	vault, server := newFakeVault(t, map[string]string{"MEMORY.md": entries("Joe runs the homelab")})
 	m, home := newTestSyncer(t, server.URL)
 
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	require.Equal(t, entries("Joe runs the homelab"), readLocal(t, home, "MEMORY.md"))
 	require.Equal(t, "", readLocal(t, home, "USER.md"), "a missing file starts empty")
 	require.Zero(t, vault.writeCount(), "an unchanged file is not written")
@@ -159,7 +160,7 @@ func TestMemorySyncLoadsTheVaultAndWritesBackAChange(t *testing.T) {
 	// Hermes's memory tool adds an entry during the turn.
 	writeLocal(t, home, "MEMORY.md", entries("Joe runs the homelab", "The factory runs on node-1"))
 	writeLocal(t, home, "USER.md", "Joe prefers short answers")
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	got, _ := vault.get("MEMORY.md")
 	require.Equal(t, entries("Joe runs the homelab", "The factory runs on node-1"), got)
 	got, _ = vault.get("USER.md")
@@ -169,7 +170,7 @@ func TestMemorySyncLoadsTheVaultAndWritesBackAChange(t *testing.T) {
 
 	// Another channel's session changes the vault: the next sync loads it.
 	vault.set("MEMORY.md", entries("Joe runs the homelab", "The factory runs on node-1", "Garage holds the notes"))
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	require.Equal(t, entries("Joe runs the homelab", "The factory runs on node-1", "Garage holds the notes"), readLocal(t, home, "MEMORY.md"))
 	require.Equal(t, 2, vault.writeCount())
 }
@@ -177,13 +178,13 @@ func TestMemorySyncLoadsTheVaultAndWritesBackAChange(t *testing.T) {
 func TestMemorySyncMergesIntoANewerCopy(t *testing.T) {
 	vault, server := newFakeVault(t, map[string]string{"MEMORY.md": entries("a", "x", "gone")})
 	m, home := newTestSyncer(t, server.URL)
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 
 	// This session replaces x, removes gone and adds c; another session
 	// meanwhile adds d.
 	writeLocal(t, home, "MEMORY.md", entries("a", "x2", "c"))
 	vault.set("MEMORY.md", entries("a", "x", "gone", "d"))
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 
 	want := entries("a", "x2", "c", "d")
 	got, _ := vault.get("MEMORY.md")
@@ -193,43 +194,77 @@ func TestMemorySyncMergesIntoANewerCopy(t *testing.T) {
 	require.Equal(t, version(entries("a", "x", "gone", "d"), true), vault.writes[1]["base_version"])
 
 	// The next sync sees no local change and writes nothing.
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	require.Len(t, vault.writes, 2)
 }
 
 func TestMemorySyncRetriesABoundedNumberOfTimes(t *testing.T) {
 	vault, server := newFakeVault(t, map[string]string{"MEMORY.md": "a"})
 	m, home := newTestSyncer(t, server.URL)
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	writeLocal(t, home, "MEMORY.md", entries("a", "mine"))
 	n := 0
 	vault.beforeWrite = func(file string) {
 		n++
 		vault.set(file, entries("a", "theirs", string(rune('0'+n))))
 	}
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	require.Equal(t, memoryCASAttempts, vault.writeCount())
 	require.Equal(t, entries("a", "mine"), readLocal(t, home, "MEMORY.md"), "the local change stays for the next sync")
 
 	vault.beforeWrite = nil
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	got, _ := vault.get("MEMORY.md")
 	require.Equal(t, entries("a", "mine", "theirs", "3"), got)
 }
 
 func TestMemorySyncKeepsTheNewerCopyOverTheLimit(t *testing.T) {
 	long := strings.Repeat("é", UserCharLimit/2)
-	vault, server := newFakeVault(t, map[string]string{"USER.md": "Joe"})
+	vault, server := newFakeVault(t, map[string]string{"USER.md": entries("Joe", "old")})
 	m, home := newTestSyncer(t, server.URL)
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	writeLocal(t, home, "USER.md", entries("Joe", long))
-	vault.set("USER.md", entries("Joe", long+"!"))
-	m.Sync(t.Context())
+	vault.set("USER.md", entries("Joe", "old", long+"!"))
+	m.Sync(t.Context(), true)
 
+	// The addition would exceed the limit, so only the removal of "old" applies.
 	got, _ := vault.get("USER.md")
-	require.Equal(t, entries("Joe", long+"!"), got, "the merge would exceed the limit, so nothing is written")
+	require.Equal(t, entries("Joe", long+"!"), got)
 	require.Equal(t, entries("Joe", long+"!"), readLocal(t, home, "USER.md"))
-	require.Len(t, vault.writes, 1)
+	require.Len(t, vault.writes, 2)
+
+	// With no removal, nothing is written.
+	writeLocal(t, home, "USER.md", entries("Joe", long+"!", long))
+	vault.set("USER.md", entries("Joe", long+"!", "new"))
+	m.Sync(t.Context(), true)
+	got, _ = vault.get("USER.md")
+	require.Equal(t, entries("Joe", long+"!", "new"), got)
+	require.Equal(t, got, readLocal(t, home, "USER.md"))
+	require.Len(t, vault.writes, 3)
+}
+
+func TestMemorySyncLoadsALostLocalFile(t *testing.T) {
+	vault, server := newFakeVault(t, map[string]string{"MEMORY.md": entries("a", "b")})
+	m, home := newTestSyncer(t, server.URL)
+	m.Sync(t.Context(), true)
+	require.NoError(t, os.Remove(filepath.Join(home, "memories", "MEMORY.md")))
+	m.Sync(t.Context(), true)
+	got, _ := vault.get("MEMORY.md")
+	require.Equal(t, entries("a", "b"), got, "a lost local file never empties the vault")
+	require.Equal(t, entries("a", "b"), readLocal(t, home, "MEMORY.md"))
+	require.Zero(t, vault.writeCount())
+}
+
+func TestMemorySyncBeforeATurnStopsWithTheTurn(t *testing.T) {
+	vault, server := newFakeVault(t, map[string]string{"MEMORY.md": "a"})
+	m, home := newTestSyncer(t, server.URL)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	m.Sync(ctx, false)
+	require.NoFileExists(t, filepath.Join(home, "memories", "MEMORY.md"))
+	m.Sync(ctx, true)
+	require.Equal(t, "a", readLocal(t, home, "MEMORY.md"))
+	require.Zero(t, vault.writeCount())
 }
 
 func TestMemorySyncSurvivesAnOutage(t *testing.T) {
@@ -239,17 +274,17 @@ func TestMemorySyncSurvivesAnOutage(t *testing.T) {
 	// The vault is down at the first turn: the files start empty and the
 	// turn's change stays local.
 	vault.setDown(true)
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	require.NoFileExists(t, filepath.Join(home, "memories", "MEMORY.md"))
 	writeLocal(t, home, "MEMORY.md", "b")
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	require.Equal(t, "b", readLocal(t, home, "MEMORY.md"))
 
 	// A new process on the same volume, after the vault is back: the
 	// change merges into the vault's copy, which it never read.
 	vault.setDown(false)
 	m = newMemorySyncer(m.server, home)
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	got, _ := vault.get("MEMORY.md")
 	require.Equal(t, entries("a", "b"), got)
 	require.Equal(t, entries("a", "b"), readLocal(t, home, "MEMORY.md"))
@@ -257,11 +292,11 @@ func TestMemorySyncSurvivesAnOutage(t *testing.T) {
 	// A later outage keeps the last synced base, so a removal still merges.
 	vault.setDown(true)
 	writeLocal(t, home, "MEMORY.md", "b")
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	vault.setDown(false)
 	vault.set("MEMORY.md", entries("a", "b", "c"))
 	m = newMemorySyncer(m.server, home)
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	got, _ = vault.get("MEMORY.md")
 	require.Equal(t, entries("b", "c"), got)
 }
@@ -274,7 +309,7 @@ func TestMemorySyncReportsToolErrors(t *testing.T) {
 	m, home := newTestSyncer(t, server.URL)
 	_, err := m.read(t.Context(), "MEMORY.md")
 	require.ErrorContains(t, err, "no Discord server")
-	m.Sync(t.Context())
+	m.Sync(t.Context(), true)
 	require.NoFileExists(t, filepath.Join(home, "memories", "MEMORY.md"))
 }
 
