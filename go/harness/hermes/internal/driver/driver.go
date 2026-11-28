@@ -161,7 +161,8 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 	// One Actor owns one Hermes conversation. Its key is bound before the
 	// call, so a turn interrupted mid-call continues the same conversation.
 	sessionKey := turn.ContinuationID
-	if sessionKey == "" {
+	first := sessionKey == ""
+	if first {
 		sessionKey = NewSessionKey()
 		if err := sink.SessionStarted(runtime.SessionStarted{ContinuationID: sessionKey}); err != nil {
 			return runtime.Outcome{}, err
@@ -178,12 +179,17 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 	if turn.TaskID != "" {
 		idempotencyKey = "kagent-task-" + turn.TaskID
 	}
+	input := turn.Prompt
 	if d.memory != nil {
 		// Load the vault's copy, which a new Hermes session puts in its
 		// prompt, or write back a change a failed sync left behind. Then
-		// write back what this turn changed.
+		// write back what this turn changed, and the latest compaction
+		// summary as the conversation's handoff note. A new session's first
+		// turn starts from that note.
 		d.memory.Sync(ctx, false)
+		defer d.memory.PushHandoff(ctx)
 		defer d.memory.Sync(ctx, true)
+		input = d.memory.SeedInput(ctx, turn.TaskID, first, turn.Prompt)
 	}
 	head, err := loadChainHead(d.cfg.Home, sessionKey)
 	if err != nil {
@@ -204,7 +210,7 @@ func (d *Driver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventS
 		}
 	}
 	start := d.now()
-	req := request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: turn.Prompt, Images: turn.Images, PreviousResponseID: base}
+	req := request{SessionKey: sessionKey, IdempotencyKey: idempotencyKey, Instructions: d.cfg.Instructions, Input: input, Images: turn.Images, PreviousResponseID: base}
 	result, err := c.respond(ctx, req)
 	if errors.Is(err, errPreviousNotFound) {
 		// The response store evicted the head. Continue by conversation name,

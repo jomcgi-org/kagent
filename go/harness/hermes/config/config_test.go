@@ -56,7 +56,11 @@ func TestParseRejectsInvalidConfig(t *testing.T) {
 		{"memory sync tools for the model", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"notes": {URL: "http://notes.test/mcp", Tools: []string{"notes_read", "memory_write"}}}
 			c.MemorySync = "notes"
-		}, "must not list memory_read or memory_write"},
+		}, "must not list memory_write"},
+		{"handoff tools for the model", func(c *Config) {
+			c.MCPServers = map[string]MCPServer{"notes": {URL: "http://notes.test/mcp", Tools: []string{"notes_read", "handoff_read"}}}
+			c.MemorySync = "notes"
+		}, "must not list handoff_read"},
 		{"MCP toolset name", func(c *Config) {
 			c.MCPServers = map[string]MCPServer{"memory": {URL: "https://m.example.com/mcp", Tools: []string{"t"}}}
 		}, "Hermes toolset name"},

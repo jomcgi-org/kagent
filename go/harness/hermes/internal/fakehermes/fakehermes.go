@@ -251,6 +251,14 @@ func answer(home string, history []string, input string) (status, text, extra st
 		}
 		return "completed", "saved", ""
 	}
+	// Like the kagent-handoff plugin after a compaction, "compact <summary>"
+	// writes the summary to kagent-handoff.md.
+	if summary, ok := strings.CutPrefix(input, "compact "); ok {
+		if err := os.WriteFile(filepath.Join(home, "kagent-handoff.md"), []byte(summary), 0o600); err != nil {
+			return "failed", "", `,"error":{"message":"write handoff"}`
+		}
+		return "completed", "compacted", ""
+	}
 	switch input {
 	case "recall":
 		raw, _ := os.ReadFile(memory)
